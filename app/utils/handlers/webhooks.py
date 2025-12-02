@@ -1,7 +1,10 @@
 import hashlib
 import hmac
+import re
+from typing import Dict, Any, List, Optional
 
 from app.models.git_platform import GitPlatform
+from app.models.role import Role
 from app.utils.normalized_push import NormalizedPush
 
 
@@ -89,37 +92,137 @@ class WebhooksHandler:
         pass
 
     @staticmethod
-    def handle_push_event(request, cls: GitPlatform, file):
-        normalized_push :NormalizedPush= cls.normalize_push_payload(request, file)
+    def handle_push_event(payload: Dict[str, Any], platform_cls: GitPlatform, role_config: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """
+        Handle push event with Role-based filtering.
 
-        first_commit= normalized_push.commits[0].hash
-        last_commit= normalized_push.commits[-1].hash
+        Args:
+            payload: The JSON payload from the webhook
+            platform_cls: The GitPlatform class used for normalization
+            role_config: The raw dictionary configuration for the Role
 
-        print(f"first: {first_commit}; last: {last_commit}")
+        Returns:
+            List of dictionaries containing 'commit', 'file', 'env', and 'key' for valid changes.
+        """
+        # 1. Normalize payload (get all commits)
+        normalized_push: NormalizedPush = platform_cls.normalize_push_payload(payload, file=None)
 
-        # if len(normalized_push.commits) == 1:
-        #     return {"first": first_commit, "last": None}
+        # 2. Resolve Role configuration
+        try:
+            # Instantiate Role to validate and use helper methods
+            base_role = Role(**role_config)
+        except Exception as e:
+            print(f"❌ Role Configuration Error: {e}")
+            return []
 
-        return {"first": first_commit, "last": last_commit}
+        # Apply overrides based on repository name
+        repo_name = normalized_push.repository
+        role = base_role.get_effective_config(repo_name)
 
+        print(f"Processing Push for Repo: {repo_name} with Role strategy")
 
+        results = []
 
+        # 3. Iterate commits and filter based on Role strategy
+        for commit in normalized_push.commits:
+            # Combine all changes
+            changed_files = set(commit.added + commit.modified)
 
+            for file_path in changed_files:
+                match_context = WebhooksHandler._match_file_to_role(file_path, normalized_push.ref, role)
 
-    # @staticmethod
-    # def handle_push_event(data):
-    #     """Handle push events"""
-    #     ref = data.get('ref', 'unknown')
-    #     repository = data.get('repository', {}).get('full_name', 'unknown')
-    #     pusher = data.get('pusher', {}).get('name', 'unknown')
-    #
-    #     print(f"🚀 PUSH EVENT")
-    #     print(f"   Repository: {repository}")
-    #     print(f"   Branch: {ref}")
-    #     print(f"   Pusher: {pusher}")
-    #
-    #     commits = data.get('commits', [])
-    #     WebhooksHandler.print_file_changes(commits, 'push')
+                if match_context:
+                    print(f"   -> Match found: {file_path} (Env: {match_context.get('env')})")
+                    results.append({
+                        "commit_hash": commit.hash,
+                        "file_path": file_path,
+                        "repository": repo_name,
+                        "env": match_context.get('env'),
+                        "key": match_context.get('key'),
+                        "variables": match_context.get('variables', {}),
+                        # Add before/after SHAs for the whole push event to allow diffing
+                        "before_sha": normalized_push.before,
+                        "after_sha": normalized_push.after
+                    })
+
+        return results
+
+    @staticmethod
+    def _match_file_to_role(file_path: str, ref: str, role: Role) -> Optional[Dict[str, Any]]:
+        """
+        Check if a file matches the Role's file strategy (fileName or filePathMap)
+        and derive environment variables.
+        """
+        env = None
+        variables = {}
+
+        # Strategy A: Specific FileName
+        if role.fileName:
+            if file_path == role.fileName:
+                # Determine Env
+                if role.envAsBranch:
+                    # Strip 'refs/heads/' if present
+                    env = ref.replace('refs/heads/', '')
+                elif role.branchMap:
+                    # Check if current branch matches any regex in branchMap
+                    branch_name = ref.replace('refs/heads/', '')
+                    for pattern, env_name in role.branchMap.items():
+                        if re.match(pattern, branch_name):
+                            env = env_name
+                            break
+                # If neither, env might be None or rely on external default (not handled here)
+
+        # Strategy B: File Path Map (Directory/Regex strategy)
+        elif role.filePathMap:
+            for pattern, val in role.filePathMap.items():
+                match = re.match(pattern, file_path)
+                if match:
+                    # Extract variables from named groups
+                    variables.update(match.groupdict())
+
+                    # If the value in map is just a placeholder like "{env}", try to resolve it
+                    # OR if the value is a literal environment name
+                    if '{' not in val:
+                        env = val
+                    else:
+                        # Try to format the value string using captured groups
+                        try:
+                            env = val.format(**variables)
+                        except KeyError:
+                            pass
+
+                    # If 'env' was captured in regex group but not explicitly mapped
+                    if not env and 'env' in variables:
+                        env = variables['env']
+
+                    break
+
+        if env:
+            variables['env'] = env
+            variables['repoName'] = role.repositories[0] if role.repositories else "unknown" # simplified
+            # Generate Unique Key
+            try:
+                # Provide default vars for key generation
+                fmt_vars = {
+                    "repoName": variables.get('repoName', ''),
+                    "env": env,
+                    "branch": ref.replace('refs/heads/', ''),
+                    "file_path": file_path
+                }
+                fmt_vars.update(variables)
+
+                key = role.uniqueKeyName.format(**fmt_vars)
+
+                return {
+                    "env": env,
+                    "key": key,
+                    "variables": variables
+                }
+            except KeyError as e:
+                print(f"⚠️ Could not generate uniqueKey: Missing variable {e}")
+                return None
+
+        return None
 
     @staticmethod
     def is_push_event(event_type):

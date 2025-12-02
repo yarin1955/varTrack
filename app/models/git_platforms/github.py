@@ -1,9 +1,9 @@
-from typing import Optional, Dict
+from typing import Optional, Dict, List, Any
 import requests
 from github import Github, GithubException
 from github import Auth
 from pydantic import ConfigDict
-
+import fnmatch
 from app.models.git_platform import GitPlatform
 from app.models.schema_registry import SchemaRegistry
 from app.utils.factories.platform_factory import PlatformFactory
@@ -27,12 +27,12 @@ class GitHubSettings(GitPlatform):
     )
 
     @property
-    def event_type_header(self):
-        return "X-GitHub-Event"
+    def event_type_header(self) -> str:
+        return 'X-Github-Event'
 
     @property
-    def git_scm_signature(self):
-        return "X-Hub-Signature-256"
+    def git_scm_signature(self) -> str:
+        return 'X-Hub-Signature-256'
 
     # @property
     # def event_type_header(self):
@@ -60,10 +60,15 @@ class GitHubSettings(GitPlatform):
         return self
 
     @staticmethod
-    def normalize_push_payload(payload, file) -> NormalizedPush:
-        payload= payload.json.get('payload')
-        commits_data = payload.get("commits", [])
-        repo = payload.get('repository', {})
+    def normalize_push_payload(payload: Dict[str, Any], file: Optional[str] = None) -> NormalizedPush:
+        # Check if we need to access 'payload' key (if passed as wrapper) or use directly
+        # Adjusting to handle standard GitHub webhook JSON payload
+        data = payload
+        if 'payload' in data and isinstance(data['payload'], dict):
+            data = data['payload']
+
+        commits_data = data.get("commits", [])
+        repo = data.get('repository', {})
 
         normalized_commits = []
         for commit in commits_data:
@@ -74,15 +79,20 @@ class GitHubSettings(GitPlatform):
                 removed=commit.get('removed', [])
             )
 
-            if normalized_commit.has_file_changed(file) or normalized_commit.has_file_added(file):
+            # If file filter is provided, only include commits that touch that file
+            if file:
+                if normalized_commit.has_file_changed(file) or normalized_commit.has_file_added(file):
+                    normalized_commits.append(normalized_commit)
+            else:
+                # If no file filter, include all commits
                 normalized_commits.append(normalized_commit)
 
         return NormalizedPush(
             provider='github',
             repository=repo.get('full_name', ''),
-            ref=payload.get('ref', ''),
-            before=payload.get('before'),
-            after=payload.get('after'),
+            ref=data.get('ref', ''),
+            before=data.get('before'),
+            after=data.get('after'),
             commits=normalized_commits
         )
 
@@ -93,6 +103,64 @@ class GitHubSettings(GitPlatform):
             self._github_client = None
 
         return self
+
+    def resolve_repositories(self, patterns: List[str], exclude_patterns: Optional[List[str]] = None) -> List[str]:
+        """
+        Resolves final repository list by applying inclusion patterns AND exclusion patterns.
+        """
+        if not self._github_client:
+            self.auth()
+
+        resolved_repos = set()
+
+        # 1. Determine Scope
+        if self.orgName:
+            target = self._github_client.get_organization(self.orgName)
+        else:
+            target = self._github_client.get_user()
+
+        # 2. Check if we need a full fetch (Wildcards present?)
+        has_wildcard = any('*' in p or '?' in p for p in patterns)
+
+        if has_wildcard:
+            # Slow Path: Fetch ALL repos to match wildcards
+            all_repos = [repo.name for repo in target.get_repos()]
+
+            for pattern in patterns:
+                # Match against just the repo name (ignoring owner prefix for now)
+                clean_pattern = pattern.split('/')[-1]
+                matches = fnmatch.filter(all_repos, clean_pattern)
+                resolved_repos.update(matches)
+        else:
+            # Fast Path: Verify specific repos exist
+            for pattern in patterns:
+                repo_name = pattern.split('/')[-1]
+                try:
+                    # Just check if it exists (API HEAD call)
+                    target.get_repo(repo_name)
+                    resolved_repos.add(repo_name)
+                except Exception as e:
+                    print(f"Warning: Repository '{repo_name}' not found: {e}")
+
+        # 3. Apply Exclusions
+        if exclude_patterns:
+            final_list = []
+            for repo in resolved_repos:
+                is_excluded = False
+                for ex_pattern in exclude_patterns:
+                    # Match against "repo" OR "owner/repo" logic if needed
+                    # Standardizing on simple name match for simplicity
+                    clean_ex = ex_pattern.split('/')[-1]
+
+                    if fnmatch.fnmatch(repo, clean_ex):
+                        is_excluded = True
+                        break
+
+                if not is_excluded:
+                    final_list.append(repo)
+            return final_list
+
+        return list(resolved_repos)
 
     def create_webhooks(self, repositories, datasource=None):
 
@@ -152,7 +220,7 @@ class GitHubSettings(GitPlatform):
         return super().git_clone(schemas_repo)
 
     async def get_file_from_commit(self, repo_name: str, commit_hash: str, file_path: str) -> Optional[str]:
-        raw_url = f"https://github.com/{self.username}/{repo_name}/raw/{commit_hash}/{file_path}"
+        raw_url = f"https://github.com/{repo_name}/raw/{commit_hash}/{file_path}"
         response = requests.get(raw_url)
         return response.text
 

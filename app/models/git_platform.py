@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Optional, TypeVar, List, Literal, Dict
+from typing import Optional, TypeVar, List, Literal, Dict, Any
 from pydantic import BaseModel, ConfigDict, HttpUrl
 import git
 import asyncio
@@ -48,16 +48,21 @@ class GitPlatform(BaseModel, ABC):
     def create_webhooks(self, repositories: List[str] | str, datasource: str=None):
         pass
 
+    @abstractmethod
+    def resolve_repositories(self, patterns: List[str], exclude_patterns: Optional[List[str]] = None) -> List[str]:
+        """Convert wildcard patterns (e.g. 'org/*') into actual repo names."""
+        pass
+
     @staticmethod
     @abstractmethod
-    def normalize_push_payload(payload, file):
+    def normalize_push_payload(payload: Dict[str, Any], file: Optional[str] = None):
         pass
 
     @abstractmethod
     def generate_webhook_url(self, datasource: str= None) -> str:
         if datasource:
-            return f"https://smee.io/Vz7vn5p8MPm6muS/webhooks/{self.name}/{datasource}"
-        return f"https://smee.io/Vz7vn5p8MPm6muS/webhooks/schemas"
+            return f"https://smee.io/wbkMDPCrORy5Hr/webhooks/{self.name}/{datasource}"
+        return f"https://smee.io/wbkMDPCrORy5Hr/webhooks/schemas"
 
     async def git_clone(self, schema: SchemaRegistry):
 
@@ -87,7 +92,7 @@ class GitPlatform(BaseModel, ABC):
         print(f"{self.protocol}://{clean_endpoint}{self.username}/{repo}.git")
         return f"{self.protocol}://{clean_endpoint}{self.username}/{repo}.git"
 
-    def setup_webhooks(self, schema: SchemaRegistry, repos: List[str], datasource):
+    def setup_webhooks(self, schema: SchemaRegistry, repos: List[str], datasource, exclude_repos: List[str] = None):
         builder: GitPlatform = self.auth()
         if schema.platform == self.name:
             asyncio.run(builder.git_clone(schema))
