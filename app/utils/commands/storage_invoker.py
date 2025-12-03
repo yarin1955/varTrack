@@ -1,30 +1,21 @@
 from typing import Any
 
-from app.utils.interfaces.icommand import Command
+from app.utils.interfaces.icommand import ICommand
 
 
 class StorageInvoker:
     """Invoker that executes commands and maintains history."""
 
     def __init__(self) -> None:
-        self._history: list[Command] = []
-        self._undo_stack: list[Command] = []
+        self._history: list[ICommand] = []
+        self._undo_stack: list[ICommand] = []
 
-    def execute_command(self, command: Command) -> Any:
+    def execute_command(self, command: ICommand) -> Any:
         """Execute a command and add it to history."""
         result = command.execute()
         self._history.append(command)
         self._undo_stack.clear()  # Clear redo stack on new command
         return result
-
-    def undo(self) -> None:
-        """Undo the last command."""
-        if not self._history:
-            raise RuntimeError("No commands to undo")
-
-        command = self._history.pop()
-        command.undo()
-        self._undo_stack.append(command)
 
     def redo(self) -> None:
         """Redo the last undone command."""
@@ -35,7 +26,7 @@ class StorageInvoker:
         command.execute()
         self._history.append(command)
 
-    def get_history(self) -> list[Command]:
+    def get_history(self) -> list[ICommand]:
         """Get command history."""
         return self._history.copy()
 

@@ -1,7 +1,9 @@
 from typing import Any
 
+from app.utils.interfaces.icommand import ICommand
 
-class UpdateCommand(Command):
+
+class UpdateCommand(ICommand):
     """Command to update data using a storage strategy."""
 
     def __init__(self, strategy: StorageStrategy, *args: Any) -> None:
@@ -32,25 +34,3 @@ class UpdateCommand(Command):
         elif isinstance(self.strategy, FileStorageStrategy) and len(self.args) == 2:
             path = self.args[0]
             self._backup = self.strategy.get(path)
-
-    def undo(self) -> None:
-        """Restore backed up data."""
-        if self._backup is None:
-            return
-
-        # For key-value stores
-        if isinstance(self.strategy, KeyValueStorageStrategy) and isinstance(self._backup, dict):
-            # Filter out None values (keys that didn't exist)
-            restore_items = {k: v for k, v in self._backup.items() if v is not None}
-            if restore_items:
-                self.strategy.update(restore_items)
-        # For document stores
-        elif isinstance(self.strategy, DocumentStorageStrategy) and len(self.args) == 3:
-            collection, query, _ = self.args
-            if self._backup:
-                self.strategy.update(collection, query, self._backup)
-        # For file stores
-        elif isinstance(self.strategy, FileStorageStrategy) and len(self.args) == 2:
-            path = self.args[0]
-            if self._backup:
-                self.strategy.update(path, self._backup)

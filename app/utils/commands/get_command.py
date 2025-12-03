@@ -11,10 +11,6 @@ class GetCommand(Command):
         self._result = self.strategy.get(*self.args)
         return self._result
 
-    def undo(self) -> None:
-        """Get operations don't modify state, so undo is a no-op."""
-        pass
-
     def get_result(self) -> Any:
         """Return the result of the last execution."""
         return self._result

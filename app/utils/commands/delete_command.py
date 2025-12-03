@@ -29,26 +29,3 @@ class DeleteCommand(Command):
         elif isinstance(self.strategy, FileStorageStrategy) and len(self.args) == 1:
             path = self.args[0]
             self._backup = self.strategy.get(path)
-
-    def undo(self) -> None:
-        """Restore deleted data."""
-        if self._backup is None:
-            return
-
-        # For key-value stores
-        if isinstance(self.strategy, KeyValueStorageStrategy) and isinstance(self._backup, dict):
-            # Filter out None values (keys that didn't exist)
-            restore_items = {k: v for k, v in self._backup.items() if v is not None}
-            if restore_items:
-                for key, value in restore_items.items():
-                    self.strategy.insert(key, value)
-        # For document stores
-        elif isinstance(self.strategy, DocumentStorageStrategy) and len(self.args) == 2:
-            collection = self.args[0]
-            if self._backup:
-                self.strategy.insert(collection, self._backup)
-        # For file stores
-        elif isinstance(self.strategy, FileStorageStrategy) and len(self.args) == 1:
-            path = self.args[0]
-            if self._backup:
-                self.strategy.insert(path, self._backup)
