@@ -6,6 +6,7 @@ import string
 class RepositoryOverride(BaseModel):
     matchRepositories: Optional[List[str]] = None
     excludeRepositories: Optional[List[str]] = None
+    enable: bool= False
 
     model_config = ConfigDict(extra="allow")
 
@@ -18,6 +19,7 @@ class Role(BaseModel):
     envAsBranch: bool = False
     envAsPR: bool = False
     envAsTags: bool = False
+    #value is destined env
     branchMap: Optional[Dict[str, str]] = None
     filePathMap: Optional[Dict[str, str]] = None
     uniqueKeyName: str = "{repoName}-{env}"
@@ -120,35 +122,28 @@ class Role(BaseModel):
 
         return self
 
-    # ==========================================
-    #             HELPER METHODS
-    # ==========================================
-
-    def get_effective_config(self, repo_name: str) -> 'Role':
-        """
-        Merges overrides and re-validates the result.
-        """
-        final_config = self.model_dump(exclude={'overrides'})
-
+    def resolve_role_for_repo(self, repo_name: str) -> 'Role':
         if not self.overrides:
             return self
 
-        for rule in self.overrides:
-            # Check Match
-            if rule.matchRepositories:
-                if not any(r in repo_name for r in rule.matchRepositories):
+        final_config = self.model_dump(exclude={'overrides'})
+
+        for override in self.overrides:
+            if not override.enable:
+                continue
+
+            if override.matchRepositories:
+                if not any(r in repo_name for r in override.matchRepositories):
                     continue
                     # Check Exclude
-            if rule.excludeRepositories:
-                if any(r in repo_name for r in rule.excludeRepositories):
+            if override.excludeRepositories:
+                if any(r in repo_name for r in override.excludeRepositories):
                     continue
 
-            # Merge Data (allowing extra fields from overrides)
-            updates = rule.model_dump(
+            updates = override.model_dump(
                 exclude={'matchRepositories', 'excludeRepositories'},
                 exclude_unset=True
             )
             final_config.update(updates)
 
-        # Re-Validation happens here
-        return Role(**final_config)
+            return Role(**final_config)
