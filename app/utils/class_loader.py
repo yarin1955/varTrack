@@ -1,31 +1,53 @@
 import importlib
-import importlib.util
 import inspect
-def config_model_for(kind: str):
-    # "github" -> yourapp.platforms.github.config:GitHubConfig
-    module = importlib.import_module(f"git_platforms.{kind}")
-    cls_name = f"{kind.capitalize()}Config"
-    return getattr(module, cls_name)
+from typing import Type, TypeVar, Optional
 
-def import_from_string(module_path: str):
-    mod = importlib.import_module(module_path)
-    classes = [
+T = TypeVar('T')
+
+def load_class_from_module(
+        module_name: str,
+        package: str,
+        expected_base_class: Optional[Type[T]] = None
+) -> Type[T]:
+
+    full_path = f"{package}.{module_name}"
+
+    try:
+        mod = importlib.import_module(f".{module_name}", package=package)
+    except ImportError as e:
+        raise ImportError(
+            f"Plugin not found. Expected file at: {full_path.replace('.', '/')}.py"
+        ) from e
+
+    # Find candidate classes defined in this module
+    candidates = [
         obj for obj in mod.__dict__.values()
         if inspect.isclass(obj) and obj.__module__ == mod.__name__
     ]
 
-    if len(classes) != 1:
-        raise ValueError(
-            f"Expected exactly one class in module '{module_path}', found {len(classes)}"
-        )
+    # Apply base class filter if specified
+    if expected_base_class:
+        candidates = [
+            cls for cls in candidates
+            if issubclass(cls, expected_base_class) and cls is not expected_base_class
+        ]
 
-    return classes[0]
+        if not candidates:
+            raise ValueError(
+                f"No class inheriting from '{expected_base_class.__name__}' "
+                f"found in module '{full_path}'."
+            )
 
-    # spec = importlib.util.spec_from_file_location("github", "git_platforms/github.py")
-    # module = importlib.util.module_from_spec(spec)
-    # spec.loader.exec_module(module)
-    #
-    # # Just get the first class, don't filter by __module__
-    # name, obj = next((name, obj) for name, obj in inspect.getmembers(module, inspect.isclass))
-    #
-    # return name
+        if len(candidates) > 1:
+            raise ValueError(
+                f"Ambiguous plugin: Found {len(candidates)} classes inheriting from "
+                f"'{expected_base_class.__name__}' in '{full_path}': {candidates}"
+            )
+    else:
+        # No base class specified - expect exactly one class
+        if len(candidates) != 1:
+            raise ValueError(
+                f"Expected exactly one class in module '{full_path}', found {len(candidates)}"
+            )
+
+    return candidates[0]

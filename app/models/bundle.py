@@ -2,11 +2,14 @@ from typing import List, Any
 from pydantic import BaseModel, ConfigDict, field_validator
 
 from app.models.datasource import DataSource
+from app.models.ds_adapter import DataSourceAdapter
 from app.models.git_platform import GitPlatform
 from app.models.role import Role
 from app.models.schema_registry import SchemaRegistry
-from app.utils.class_loader import import_from_string
-
+# from app.utils.class_loader import safe_load_plugin
+from app.models.datasources import load_module as ds_loader
+from app.models.datasources_adapters import load_module as ds_adapter_loader
+from app.models.git_platforms import load_module as platform_loader
 
 class Bundle(BaseModel):
     platforms: List[GitPlatform]  # We want classes, not instances
@@ -27,11 +30,11 @@ class Bundle(BaseModel):
         for item in v:
             if isinstance(item, dict):
                 platform_name = item.get('name')
-                platform_cls = import_from_string(f"app.models.git_platforms.{platform_name}")
+                platform_cls = platform_loader(f"{platform_name}", GitPlatform)
                 # platform_cls = import_from_string('git_platforms.github')
                 out.append(platform_cls(**item))  # Append the class itself, not an instance
             elif isinstance(item, str):
-                platform_cls = import_from_string(item)
+                platform_cls = platform_loader(item)
                 out.append(platform_cls)  # Append the class itself, not an instance
             else:
                 out.append(item)  # Already a class object
@@ -44,13 +47,13 @@ class Bundle(BaseModel):
         for item in v:
             if isinstance(item, dict):
                 datasource_name = item.get('name')
-                datasource_cls = import_from_string(f"app.models.datasources.{datasource_name}")
-                ds_adapter_cls = import_from_string(f"app.models.datasources_adapters.{datasource_name}")
+                datasource_cls = ds_loader(f"{datasource_name}", DataSource)
+                ds_adapter_cls = ds_adapter_loader(f"{datasource_name}", DataSourceAdapter)
 
                 # platform_cls = import_from_string('git_platforms.github')
                 out.append(datasource_cls(**item))  # Append the class itself, not an instance
             elif isinstance(item, str):
-                datasource_cls = import_from_string(item)
+                datasource_cls = ds_loader(item)
                 out.append(datasource_cls)  # Append the class itself, not an instance
             else:
                 out.append(item)  # Already a class object
