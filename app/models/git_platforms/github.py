@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Optional, Dict, List, Any
 import requests
 from github import Github, GithubException
@@ -8,6 +9,7 @@ from app.models.git_platform import GitPlatform
 from app.models.schema_registry import SchemaRegistry
 from app.utils.factories.platform_factory import PlatformFactory
 from app.utils.normalized_commit import NormalizedCommit
+from app.utils.normalized_pr import NormalizedPR
 from app.utils.normalized_push import NormalizedPush
 
 
@@ -33,6 +35,14 @@ class GitHubSettings(GitPlatform):
     @property
     def git_scm_signature(self) -> str:
         return 'X-Hub-Signature-256'
+
+    @staticmethod
+    def is_push_event(event_type):
+        return event_type == 'push'
+
+    @staticmethod
+    def is_pr_event(event_type):
+        return event_type == 'pull_request'
 
     # @property
     # def event_type_header(self):
@@ -64,36 +74,45 @@ class GitHubSettings(GitPlatform):
         # Check if we need to access 'payload' key (if passed as wrapper) or use directly
         # Adjusting to handle standard GitHub webhook JSON payload
         data = payload
-        if 'payload' in data and isinstance(data['payload'], dict):
-            data = data['payload']
+        if "payload" in data and isinstance(data["payload"], dict):
+            data = data["payload"]
 
         commits_data = data.get("commits", [])
-        repo = data.get('repository', {})
+        repo = data.get("repository", {}) or {}
 
-        normalized_commits = []
+        normalized_commits: List[NormalizedCommit] = []
+
         for commit in commits_data:
+            # Parse timestamp if present
+            ts_raw = commit.get("timestamp")  # e.g. "2024-01-01T12:34:56Z"
+            ts: Optional[datetime] = None
+            if ts_raw:
+                # GitHub uses ISO 8601 + 'Z' for UTC (e.g. "...Z")
+                # Replace trailing 'Z' with '+00:00' for datetime.fromisoformat
+                ts = datetime.fromisoformat(ts_raw.replace("Z", "+00:00"))
+
             normalized_commit = NormalizedCommit(
-                hash=commit.get('id', ''),
-                added=commit.get('added', []),
-                modified=commit.get('modified', []),
-                removed=commit.get('removed', [])
+                hash=commit.get("id", ""),
+                added=commit.get("added", []) or [],
+                modified=commit.get("modified", []) or [],
+                removed=commit.get("removed", []) or [],
+                timestamp=ts,
             )
 
-            # If file filter is provided, only include commits that touch that file
             if file:
+                # Only include commits that touch the given file
                 if normalized_commit.has_file_changed(file) or normalized_commit.has_file_added(file):
                     normalized_commits.append(normalized_commit)
             else:
-                # If no file filter, include all commits
                 normalized_commits.append(normalized_commit)
 
+
         return NormalizedPush(
-            provider='github',
-            repository=repo.get('full_name', ''),
-            ref=data.get('ref', ''),
-            before=data.get('before'),
-            after=data.get('after'),
-            commits=normalized_commits
+            repository=repo.get("full_name", ""),
+            branch=data.get("ref", ""),
+            before=data.get("before", ""),
+            after=data.get("after", ""),
+            commits=normalized_commits,
         )
 
     def closed(self):
@@ -161,6 +180,116 @@ class GitHubSettings(GitPlatform):
             return final_list
 
         return list(resolved_repos)
+
+    @staticmethod
+    def normalize_pr_payload(payload: Dict[str, Any], newest_first: bool = False) -> "NormalizedPR":
+
+        data = payload
+        if "payload" in data and isinstance(data["payload"], dict):
+            data = data["payload"]
+
+        action = data.get("action", "")
+        pr = data.get("pull_request", {}) or {}
+
+        base = pr.get("base", {}) or {}
+        head = pr.get("head", {}) or {}
+
+        repo = (
+            data.get("repository", {})
+            or base.get("repo", {})
+            or {}
+        )
+        repository_full_name = repo.get("full_name", "")
+
+        base_ref = base.get("ref", "")   # e.g. "main"
+        head_ref = head.get("ref", "")   # e.g. "feature-branch"
+
+        # SHA of base and head at the time of the event
+        target_branch_sha = base.get("sha", "")
+        head_sha = head.get("sha", "")
+
+        # Merge-base SHA is not provided by GitHub webhooks by default.
+        # You can compute it via the compare API and inject it as "base_sha".
+        base_sha = data.get("base_sha", target_branch_sha)
+
+        # is_approved is also not part of the core webhook; assume you inject it.
+        is_approved = bool(data.get("is_approved", False))
+
+        # --- normalize commits (if present in payload) ---
+        normalized_commits: List[NormalizedCommit] = []
+        commits_data = data.get("commits", []) or []
+
+        for commit in commits_data:
+            ts_raw = commit.get("timestamp")  # whatever field you use
+            ts: Optional[datetime] = None
+            if ts_raw:
+                ts = datetime.fromisoformat(ts_raw.replace("Z", "+00:00"))
+
+            normalized_commits.append(
+                NormalizedCommit(
+                    hash=commit.get("id", ""),
+                    added=commit.get("added", []) or [],
+                    modified=commit.get("modified", []) or [],
+                    removed=commit.get("removed", []) or [],
+                    timestamp=ts,
+                )
+            )
+
+        return NormalizedPR(
+            id=str(data.get("number") or pr.get("id") or ""),
+            action=action,
+            repository=repository_full_name,
+            base_branch=base_ref,
+            head_branch=head_ref,
+            base_sha=base_sha,
+            target_branch_sha=target_branch_sha,
+            head_sha=head_sha,
+            is_approved=is_approved,
+            commits=normalized_commits,
+        )
+
+    def get_merge_base(self, repo_name: str, base_sha: str, head_sha: str) -> Optional[str]:
+        """
+        Calculates the merge base (common ancestor) between two commits using GitHub Compare API.
+        """
+        if not hasattr(self, '_github_client') or not self._github_client:
+            self.auth()
+
+        try:
+            repo = self._github_client.get_repo(repo_name)
+            # The 'compare' API with two SHAs automagically finds the merge base in the response
+            comparison = repo.compare(base_sha, head_sha)
+            if comparison.merge_base_commit:
+                return comparison.merge_base_commit.sha
+            return None
+        except Exception as e:
+            print(f"Error fetching merge base for {repo_name}: {e}")
+            return None
+
+    def get_pr_files(self, repo_name: str, pr_number: int) -> List[str]:
+        """
+        Fetches the list of files changed in a PR.
+        """
+        if not hasattr(self, '_github_client') or not self._github_client:
+            self.auth()
+
+        try:
+            repo = self._github_client.get_repo(repo_name)
+            pull = repo.get_pull(int(pr_number))
+            # Paginated list, iterating yields all files
+            return [f.filename for f in pull.get_files()]
+
+        # for f in pull.get_files():
+        #     status = f.status  # e.g. 'added', 'modified', 'removed', 'renamed'
+        #     files_by_status.setdefault(status, []).append(f.filename)
+        #
+        # return files_by_status
+
+
+
+        except Exception as e:
+            print(f"Error fetching PR files for {repo_name}#{pr_number}: {e}")
+            return []
 
     def create_webhooks(self, repositories, datasource=None):
 

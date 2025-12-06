@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import List
 
 
@@ -11,6 +12,7 @@ class NormalizedCommit:
     added: List[str] = field(default_factory=list)
     modified: List[str] = field(default_factory=list)
     removed: List[str] = field(default_factory=list)
+    timestamp: datetime | None = None
 
     def has_file_changed(self, file_path: str) -> bool:
         """Check if a specific file was changed (added or modified)"""
