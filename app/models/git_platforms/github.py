@@ -181,62 +181,94 @@ class GitHubSettings(GitPlatform):
 
         return list(resolved_repos)
 
-    @staticmethod
-    def normalize_pr_payload(payload: Dict[str, Any], newest_first: bool = False) -> "NormalizedPR":
-
+    def normalize_pr_payload(self, payload: Dict[str, Any], newest_first: bool = False) -> "NormalizedPR":
+        """
+        Normalize PR payload and enrich with API data (files, real merge base).
+        Requires API access because PR webhooks do not contain the full file list or merge base.
+        """
         data = payload
         if "payload" in data and isinstance(data["payload"], dict):
             data = data["payload"]
 
+        # Ensure we are authenticated to make API calls
+        self.auth()
+
+        # 1. Extract Core Info
+        pr_data = data.get("pull_request", {}) or {}
         action = data.get("action", "")
-        pr = data.get("pull_request", {}) or {}
+        pr_number = data.get("number") or pr_data.get("number")
 
-        base = pr.get("base", {}) or {}
-        head = pr.get("head", {}) or {}
+        # 2. Determine Repository
+        repo_info = data.get("repository", {})
+        if not repo_info:
+            repo_info = pr_data.get("base", {}).get("repo", {})
+        repository_full_name = repo_info.get("full_name", "")
 
-        repo = (
-            data.get("repository", {})
-            or base.get("repo", {})
-            or {}
-        )
-        repository_full_name = repo.get("full_name", "")
+        # 3. Extract Branches & Tips
+        base = pr_data.get("base", {})
+        head = pr_data.get("head", {})
 
-        base_ref = base.get("ref", "")   # e.g. "main"
-        head_ref = head.get("ref", "")   # e.g. "feature-branch"
-
-        # SHA of base and head at the time of the event
+        base_ref = base.get("ref", "")
+        head_ref = head.get("ref", "")
         target_branch_sha = base.get("sha", "")
         head_sha = head.get("sha", "")
-
-        # Merge-base SHA is not provided by GitHub webhooks by default.
-        # You can compute it via the compare API and inject it as "base_sha".
-        base_sha = data.get("base_sha", target_branch_sha)
-
-        # is_approved is also not part of the core webhook; assume you inject it.
         is_approved = bool(data.get("is_approved", False))
 
-        # --- normalize commits (if present in payload) ---
-        normalized_commits: List[NormalizedCommit] = []
-        commits_data = data.get("commits", []) or []
+        # 4. API CALL: Calculate Real Merge Base
+        # The webhook 'base_sha' is often just the target tip, not the actual merge ancestor.
+        base_sha = self.get_merge_base(repository_full_name, target_branch_sha, head_sha)
+        if not base_sha:
+            # Fallback if API fails, though diffs might be inaccurate
+            base_sha = target_branch_sha
 
-        for commit in commits_data:
-            ts_raw = commit.get("timestamp")  # whatever field you use
-            ts: Optional[datetime] = None
-            if ts_raw:
-                ts = datetime.fromisoformat(ts_raw.replace("Z", "+00:00"))
+            # 5. API CALL: Fetch Changed Files
+        # PR webhooks don't list all files. We must fetch them to populate the commit/file info.
+        added_files = []
+        modified_files = []
+        removed_files = []
 
-            normalized_commits.append(
-                NormalizedCommit(
-                    hash=commit.get("id", ""),
-                    added=commit.get("added", []) or [],
-                    modified=commit.get("modified", []) or [],
-                    removed=commit.get("removed", []) or [],
-                    timestamp=ts,
-                )
-            )
+        try:
+            gh_repo = self._github_client.get_repo(repository_full_name)
+            pull_request = gh_repo.get_pull(int(pr_number))
+
+            # get_files() is paginated and covers the entire PR diff
+            for file in pull_request.get_files():
+                if file.status == "added":
+                    added_files.append(file.filename)
+                elif file.status == "removed":
+                    removed_files.append(file.filename)
+                elif file.status == "modified":
+                    modified_files.append(file.filename)
+                elif file.status == "renamed":
+                    # Treat rename as add + remove (or just add new name depending on logic)
+                    added_files.append(file.filename)
+                    if file.previous_filename:
+                        removed_files.append(file.previous_filename)
+
+        except Exception as e:
+            print(f"Error fetching PR files: {e}")
+
+        # 6. Create Synthetic Commit
+        # Use PR updated_at as the timestamp for this event
+        ts_raw = pr_data.get("updated_at") or pr_data.get("created_at")
+        ts_synthetic: Optional[datetime] = None
+        if ts_raw:
+            try:
+                # Handle GitHub's ISO format (e.g. 2023-01-01T12:00:00Z)
+                ts_synthetic = datetime.fromisoformat(ts_raw.replace("Z", "+00:00"))
+            except ValueError:
+                pass
+
+        synthetic_commit = NormalizedCommit(
+            hash=head_sha,
+            added=added_files,
+            modified=modified_files,
+            removed=removed_files,
+            timestamp=ts_synthetic
+        )
 
         return NormalizedPR(
-            id=str(data.get("number") or pr.get("id") or ""),
+            id=str(pr_number),
             action=action,
             repository=repository_full_name,
             base_branch=base_ref,
@@ -245,8 +277,64 @@ class GitHubSettings(GitPlatform):
             target_branch_sha=target_branch_sha,
             head_sha=head_sha,
             is_approved=is_approved,
-            commits=normalized_commits,
+            commits=[synthetic_commit]
         )
+
+    # def normalize_pr_payload(self, payload: Dict[str, Any], newest_first: bool = False) -> "NormalizedPR":
+    #     data = payload.get("payload", payload)
+    #     self.auth()
+    #
+    #     pr = data.get("pull_request", {})
+    #     base, head = pr.get("base", {}), pr.get("head", {})
+    #     repo_name = (data.get("repository") or base.get("repo") or {}).get("full_name", "")
+    #
+    #     # OPTIMIZATION: Use a single API call ('compare') to get both the Real Merge Base and Changed Files.
+    #     # This is significantly faster than calling get_merge_base() + get_pull().get_files() separately.
+    #     try:
+    #         repo = self._github_client.get_repo(repo_name)
+    #         # compare() calculates the diff from the common ancestor (3-dot diff)
+    #         diff = repo.compare(base.get("sha"), head.get("sha"))
+    #
+    #         base_sha = diff.merge_base_commit.sha
+    #         files = diff.files
+    #     except Exception as e:
+    #         print(f"Warning: API compare failed ({e}). Falling back to payload data.")
+    #         base_sha = base.get("sha", "")  # Fallback
+    #         files = []
+    #
+    #     # Sort files into categories
+    #     added, modified, removed = [], [], []
+    #     for f in files:
+    #         if f.status == "added":
+    #             added.append(f.filename)
+    #         elif f.status == "modified":
+    #             modified.append(f.filename)
+    #         elif f.status == "removed":
+    #             removed.append(f.filename)
+    #         elif f.status == "renamed":
+    #             added.append(f.filename)
+    #             if f.previous_filename: removed.append(f.previous_filename)
+    #
+    #     # Parse timestamp from payload (faster than parsing commit objects)
+    #     ts = None
+    #     if pr.get("updated_at"):
+    #         try:
+    #             ts = datetime.fromisoformat(pr["updated_at"].replace("Z", "+00:00"))
+    #         except ValueError:
+    #             pass
+    #
+    #     return NormalizedPR(
+    #         id=str(data.get("number") or pr.get("number") or ""),
+    #         action=data.get("action", ""),
+    #         repository=repo_name,
+    #         base_branch=base.get("ref", ""),
+    #         head_branch=head.get("ref", ""),
+    #         base_sha=base_sha,
+    #         target_branch_sha=base.get("sha", ""),
+    #         head_sha=head.get("sha", ""),
+    #         is_approved=bool(data.get("is_approved", False)),
+    #         commits=[NormalizedCommit(head.get("sha", ""), added, modified, removed, ts)]
+    #     )
 
     def get_merge_base(self, repo_name: str, base_sha: str, head_sha: str) -> Optional[str]:
         """
@@ -329,18 +417,6 @@ class GitHubSettings(GitPlatform):
 
         return self
 
-                # Add secret if provided
-                # if webhook_secret:
-                #     config["secret"] = webhook_secret
-
-                # Create the webhook
-        #         repo.create_hook(
-        #             name="web",
-        #             config=config,
-        #             events=self.events,
-        #             active=True
-        #         )
-        #
 
     def generate_webhook_url(self, datasource: str= None) -> str:
         return super().generate_webhook_url(datasource)
