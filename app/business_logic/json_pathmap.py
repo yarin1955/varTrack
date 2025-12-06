@@ -111,13 +111,15 @@
 from collections import deque
 from typing import Any, Union, Dict
 
+from typing import Any, Dict, Union
+
 
 def flatten_dfs(
         data: Any,
         env_key: str = "predev",
         as_kv: bool = False,
         use_default_fallback: bool = False,
-        default_key: str = "default",
+        default_key: str = "default_value",  # Note: Updated based on your JSON ("default_value")
         separator: str = "/",
 ) -> Union[Any, Dict[str, Any]]:
     """Flatten nested data with env overrides using DFS (no recursion limits)."""
@@ -126,19 +128,34 @@ def flatten_dfs(
         return s.replace("~", "~0").replace("/", "~1")
 
     def _res(v: Any) -> Any:
-        return v.get(env_key) if isinstance(v, dict) and env_key in v else \
-            v.get(default_key) if isinstance(v, dict) and use_default_fallback and default_key in v else v
+        # Check for env_key first
+        if isinstance(v, dict) and env_key in v:
+            return v[env_key]
+        # Check for default_key fallback
+        if isinstance(v, dict) and use_default_fallback and default_key in v:
+            return v[default_key]
+        return v
 
+    # Resolve root
     data = _res(data)
+
     if not isinstance(data, (dict, list)):
         return {"": data} if as_kv else data
 
+    # Initialize result
     result = {} if as_kv else ([] if isinstance(data, list) else {})
+
+    # Stack contains: (source_node, destination_node, current_path_list)
     stack = [(data, result, [])]
 
     while stack:
         src, dst, path = stack.pop()
-        for key, raw in reversed(list(src.items() if isinstance(src, dict) else enumerate(src))):
+
+        # Determine iterator based on type
+        iterator = src.items() if isinstance(src, dict) else enumerate(src)
+
+        # Reverse to maintain order in stack (DFS)
+        for key, raw in reversed(list(iterator)):
             val = _res(raw)
             new_path = path + [_esc(str(key))]
 
@@ -147,21 +164,62 @@ def flatten_dfs(
                     stack.append((val, None, new_path))
                 else:
                     new_dst = [] if isinstance(val, list) else {}
-                    (dst.__setitem__ if isinstance(src, dict) else dst.append)(
-                        key if isinstance(src, dict) else new_dst
-                    )
+
+                    # --- FIX START ---
+                    # Explicitly handle assignment based on parent type (src)
+                    if isinstance(src, dict):
+                        dst[key] = new_dst
+                    else:
+                        dst.append(new_dst)
+                    # --- FIX END ---
+
                     stack.append((val, new_dst, new_path))
             else:
                 if as_kv:
-                    result[separator + separator.join(new_path) if new_path else ""] = val
+                    k_str = separator + separator.join(new_path) if new_path else ""
+                    result[k_str] = val
                 else:
-                    (dst.__setitem__ if isinstance(src, dict) else dst.append)(
-                        key if isinstance(src, dict) else val
-                    )
+                    # --- FIX START ---
+                    if isinstance(src, dict):
+                        dst[key] = val
+                    else:
+                        dst.append(val)
+                    # --- FIX END ---
 
     return result
 
 
+# def find_key_iterative(obj, target_key, return_value_only=False):
+#     """Non-recursive search for a key in nested JSON"""
+#     results = []
+#     queue = deque([(obj, "")])
+#
+#     while queue:
+#         current_obj, current_path = queue.popleft()
+#
+#         if isinstance(current_obj, dict):
+#             for key, value in current_obj.items():
+#                 path = f"{current_path}.{key}" if current_path else key
+#
+#                 if key == target_key:
+#                     results.append({
+#                         "path": path,
+#                         "value": value
+#                     })
+#
+#                 if isinstance(value, (dict, list)):
+#                     queue.append((value, path))
+#
+#         elif isinstance(current_obj, list):
+#             for i, item in enumerate(current_obj):
+#                 path = f"{current_path}[{i}]"
+#                 if isinstance(item, (dict, list)):
+#                     queue.append((item, path))
+#
+#     if return_value_only and results:
+#         return results[0]["value"]
+#
+#     return results
 def find_key_iterative(obj, target_key):
     """Non-recursive search for a key in nested JSON"""
     results = []
@@ -195,91 +253,4 @@ def find_key_iterative(obj, target_key):
                 if isinstance(item, (dict, list)):
                     queue.append((item, path))
 
-    return results
-#
-#
-# def unflatten_dfs(
-#         data: Dict[str, Any],
-#         separator: str = "/",
-#         *,
-#         force_list_indices: bool = False,
-# ) -> Any:
-#     """Reconstruct nested structure from flattened key-value pairs using DFS.
-#
-#     Args:
-#         data: Flattened dict with separator-delimited keys
-#         separator: Character used to separate path segments (default: "/")
-#         force_list_indices: If True, numeric keys create lists; if False, auto-detect
-#
-#     Examples:
-#         >>> unflatten_dfs({'/db/host': 'localhost', '/db/port': 5432})
-#         {'db': {'host': 'localhost', 'port': 5432}}
-#
-#         >>> unflatten_dfs({'db.host': 'localhost'}, separator='.')
-#         {'db': {'host': 'localhost'}}
-#
-#         >>> unflatten_dfs({'/items/0': 'a', '/items/1': 'b'})
-#         {'items': ['a', 'b']}
-#     """
-#
-#     def _unesc(s: str) -> str:
-#         return s.replace("~1", "/").replace("~0", "~")
-#
-#     def _is_int(s: str) -> bool:
-#         try:
-#             int(s)
-#             return True
-#         except ValueError:
-#             return False
-#
-#     if not data:
-#         return {}
-#
-#     # Handle empty string key (root scalar)
-#     if "" in data and len(data) == 1:
-#         return data[""]
-#
-#     # Determine if root should be list or dict
-#     root = None
-#
-#     for key, val in data.items():
-#         # Parse path: strip leading separator, split, unescape
-#         path = [_unesc(p) for p in key.lstrip(separator).split(separator) if p]
-#
-#         if not path:
-#             return val  # Root scalar
-#
-#         # Initialize root on first iteration
-#         if root is None:
-#             root = [] if (force_list_indices or _is_int(path[0])) else {}
-#
-#         # Navigate/create path
-#         current = root
-#         for i, segment in enumerate(path[:-1]):
-#             next_segment = path[i + 1]
-#             is_next_list = force_list_indices or _is_int(next_segment)
-#
-#             if isinstance(current, dict):
-#                 if segment not in current:
-#                     current[segment] = [] if is_next_list else {}
-#                 current = current[segment]
-#             else:  # list
-#                 idx = int(segment)
-#                 # Extend list if needed
-#                 while len(current) <= idx:
-#                     current.append(None)
-#                 if current[idx] is None:
-#                     current[idx] = [] if is_next_list else {}
-#                 current = current[idx]
-#
-#         # Set final value
-#         final_key = path[-1]
-#         if isinstance(current, dict):
-#             current[final_key] = val
-#         else:  # list
-#             idx = int(final_key)
-#             while len(current) <= idx:
-#                 current.append(None)
-#             current[idx] = val
-#
-#     return root
+    return results[0]

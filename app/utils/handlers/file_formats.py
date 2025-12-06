@@ -102,51 +102,62 @@ class FileFormatsHandler:
         return {root.tag: parse_element(root)}
 
     @staticmethod
-    def convert_string_to_json(content: str) -> str:
+    def convert_string_to_json(content: str):
         """
-        Convert string content in YAML, XML, TOML, or JSON format to JSON.
-        Automatically detects the input format.
-
-        Args:
-            content: String content in any supported format
-
-        Returns:
-            JSON string representation
+        Parses string content (JSON, YAML, XML) into a Python Dictionary/List.
         """
         content = content.strip()
 
-        # Try JSON first (most common and fastest to validate)
+        # Try JSON
         try:
-            data = json.loads(content)
-            return json.dumps(data, indent=2, ensure_ascii=False)
+            return json.loads(content)  # Return the object, not a string
         except (json.JSONDecodeError, ValueError):
             pass
 
-        # Try XML (check for opening tag)
+        # Try XML
         if content.startswith('<'):
             try:
-                data = FileFormatsHandler.xml_to_dict(content)
-                return json.dumps(data, indent=2, ensure_ascii=False)
+                return FileFormatsHandler.xml_to_dict(content)
             except Exception:
                 pass
 
         # Try YAML
         try:
             data = yaml.safe_load(content)
-            # YAML can parse plain strings, so check if we got meaningful data
             if data is not None and not isinstance(data, str):
-                return json.dumps(data, indent=2, ensure_ascii=False)
+                return data  # Return the object
         except yaml.YAMLError:
             pass
 
-        # Try TOML
-        # try:
-        #     data = toml.loads(content)
-        #     return json.dumps(data, indent=2, ensure_ascii=False)
-        # except toml.TomlDecodeError:
-        #     pass
+        raise ValueError("Unable to parse content as JSON, YAML, or XML")
 
-        raise ValueError("Unable to parse content as JSON, YAML, XML, or TOML")
+    @staticmethod
+    def convert_string_to_dict(content: str) -> dict:
+        """Convert string content to Python dict"""
+        content = content.strip()
+
+        # Try JSON first
+        try:
+            return json.loads(content)
+        except (json.JSONDecodeError, ValueError):
+            pass
+
+        # Try XML
+        if content.startswith('<'):
+            try:
+                return FileFormatsHandler.xml_to_dict(content)
+            except Exception:
+                pass
+
+        # Try YAML
+        try:
+            data = yaml.safe_load(content)
+            if data is not None and not isinstance(data, str):
+                return data
+        except yaml.YAMLError:
+            pass
+
+        raise ValueError("Could not parse content as JSON, XML, YAML, or TOML")
 
     # @staticmethod
     # def convert_string_to_json(content: str, format_type: str) -> str:

@@ -1,7 +1,14 @@
+from typing import Dict, Optional, Any
+
+from bson import ObjectId
+from gridfs import GridFS
+from pymongo.errors import PyMongoError
+from pymongo.synchronous.collection import Collection
+
 from app.utils.interfaces.istorage_strategy import IStorageStrategy
 
 
-class FileStorageStrategy(IStorageStrategy):
+class MongoFileStrategy(IStorageStrategy):
     """
     Store data as files using GridFS (MongoDB's file storage system).
     Best for: Large files, binary data, images, videos, documents > 16MB.
@@ -219,65 +226,3 @@ class FileStorageStrategy(IStorageStrategy):
 
         except PyMongoError as e:
             raise RuntimeError(f"Failed to delete file: {str(e)}")
-
-
-# Example usage
-if __name__ == "__main__":
-    from pymongo import MongoClient
-
-    # Connect to MongoDB
-    client = MongoClient("mongodb://localhost:27017/")
-    db = client["test_db"]
-
-    # Document Storage Example
-    print("=== Document Storage Strategy ===")
-    doc_strategy = DocumentStorageStrategy()
-    collection = db["users"]
-
-    # Insert
-    doc_id = doc_strategy.insert(collection, {
-        "name": "John Doe",
-        "email": "john@example.com",
-        "age": 30
-    })
-    print(f"Inserted document ID: {doc_id}")
-
-    # Get
-    doc = doc_strategy.get(collection, {"_id": doc_id})
-    print(f"Retrieved document: {doc}")
-
-    # Update
-    updated = doc_strategy.update(collection, {"_id": doc_id}, {"age": 31})
-    print(f"Updated: {updated}")
-
-    # Delete
-    deleted = doc_strategy.delete(collection, {"_id": doc_id})
-    print(f"Deleted: {deleted}")
-
-    # File Storage Example
-    print("\n=== File Storage Strategy ===")
-    file_strategy = FileStorageStrategy()
-
-    # Insert
-    file_id = file_strategy.insert(collection, {
-        "filename": "test.txt",
-        "content": b"Hello, World!",
-        "metadata": {"author": "John"},
-        "content_type": "text/plain"
-    })
-    print(f"Inserted file ID: {file_id}")
-
-    # Get
-    file_data = file_strategy.get(collection, {"_id": file_id})
-    print(f"Retrieved file: {file_data['filename']}, content: {file_data['content']}")
-
-    # Update
-    updated = file_strategy.update(collection, {"_id": file_id}, {
-        "filename": "test.txt",
-        "content": b"Updated content!"
-    })
-    print(f"Updated: {updated}")
-
-    # Delete
-    deleted = file_strategy.delete(collection, {"_id": file_id})
-    print(f"Deleted: {deleted}")

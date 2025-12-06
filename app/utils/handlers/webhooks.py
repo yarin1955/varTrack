@@ -14,19 +14,26 @@ from app.utils.normalized_push import NormalizedPush
 class WebhooksHandler:
 
     @staticmethod
-    def handle_webhook(platform: GitPlatform, raw_payload, signature, event_type, secret, role: Role):
+    def handle_webhook(platform: GitPlatform, raw_payload, json_payload, headers, role: Role):
+
+        secret = platform.secret
+
+        event_type_header = platform.event_type_header
+        signature_header = platform.git_scm_signature
+
+        event_type = headers.get(event_type_header)
+        signature = headers.get(signature_header)
 
         if not WebhooksHandler.verify_signature(secret, raw_payload, signature):
             return jsonify({'error': 'Invalid signature'}), 401
 
         change_files: List[ChangeFile] = []
-
-        if role.envAsPR and platform.is_pr_event(event_type):
-            change_files = platform.normalize_pr_payload(raw_payload)
+        if role["envAsPR"] and platform.is_pr_event(event_type):
+            change_files = platform.normalize_pr_payload(json_payload)
             return change_files
 
         if platform.is_push_event(event_type):
-            change_files = platform.normalize_push_payload(raw_payload)
+            change_files = platform.normalize_push_payload(json_payload)
             return change_files
 
     @staticmethod

@@ -1,5 +1,5 @@
-from typing import Collection, Dict, Any
-
+from typing import Dict, Any, Optional
+from pymongo.synchronous.collection import Collection
 from bson import ObjectId
 from pymongo.errors import PyMongoError
 
@@ -13,26 +13,15 @@ class MongoDocumentStrategy(IStorageStrategy):
     """
 
     def insert(self, collection: Collection, data: Dict[str, Any]) -> str:
-        """
-        Insert a document into the collection.
 
-        Args:
-            collection: MongoDB collection object
-            data: Dictionary containing the document data
-
-        Returns:
-            str: Inserted document ID as string
-
-        Raises:
-            ValueError: If data is invalid
-            RuntimeError: If insertion fails
-        """
         try:
             if not data:
                 raise ValueError("Data cannot be empty")
 
             result = collection.insert_one(data)
-            return str(result.inserted_id)
+            data['_id'] = str(result.inserted_id)
+            return data
+            # return str(result.inserted_id)
 
         except PyMongoError as e:
             raise RuntimeError(f"Failed to insert document: {str(e)}")

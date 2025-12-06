@@ -1,15 +1,13 @@
 
 from typing import Any
-from pymongo import MongoClient
-import gridfs
 
 from app.models.datasources.mongo import MongoConfig
 from app.models.ds_adapter import DataSourceAdapter
 from app.utils.enums.strategy_type import StrategyEnum
 from app.utils.factories.ds_adapter_factory import DSAdapterFactory
 from app.utils.interfaces.istorage_strategy import IStorageStrategy
-from app.utils.strategies.document_strategy import DocumentStorageStrategy
-from app.utils.strategies.file_strategy import FileStorageStrategy
+from app.utils.strategies.mongo_doc_strategy import MongoDocumentStrategy
+from app.utils.strategies.mongo_file_strategy import MongoFileStrategy
 
 
 @DSAdapterFactory.register()
@@ -18,28 +16,27 @@ class MongoAdapter(DataSourceAdapter):
 
     def __init__(self, config: MongoConfig):
         self._config = config
-
-        self._strategy= self._select_strategy(config)
+        self._strategy = self._select_strategy(config)
+        self._client = None
+        self._collection = None  # Add this to store the collection object
 
     def _select_strategy(self, config: MongoConfig) -> IStorageStrategy:
         if config.update_strategy == StrategyEnum.FILE:
-            return FileStorageStrategy()
-        # default (also covers MongoStorageStrategy.DOCUMENT)
-        return DocumentStorageStrategy()
+            return MongoFileStrategy()
+        return MongoDocumentStrategy()
 
     def connect(self):
         try:
             from pymongo import MongoClient
             from pymongo.errors import ConnectionFailure, ConfigurationError
 
-            # Get PyMongo connection options from config
             options = self._config.get_pymongo_options()
-
-            # Create MongoClient with the options
             self._client = MongoClient(**options)
-
-            # Test the connection by pinging the server
             self._client.admin.command('ping')
+
+            # Get the actual collection object
+            db = self._client[self._config.database]  # Assuming config has database name
+            self._collection = db[self._config.collection]
 
             return self._client
 
@@ -50,13 +47,12 @@ class MongoAdapter(DataSourceAdapter):
         except Exception as e:
             raise ConnectionError(f"Unexpected error connecting to MongoDB: {str(e)}")
 
-
-    def insert(self, *args: Any, **kwargs: Any) -> None:
+    def insert(self, data) -> None:
         """Dispatch insert based on arguments."""
-        if len(args) == 2 and isinstance(args[0], str) and isinstance(args[1], dict):
-            self._insert_document(args[0], args[1])
-        elif len(args) == 2 and isinstance(args[0], str) and isinstance(args[1], bytes):
-            self._insert_file(args[0], args[1])
+        if self._collection is None:
+            raise RuntimeError("Not connected to MongoDB. Call connect() first.")
+        # Pass the collection object, not the string
+        self._strategy.insert(self._collection, data)
 
     def get(self, *args: Any, **kwargs: Any) -> Any:
         """Dispatch get based on arguments."""

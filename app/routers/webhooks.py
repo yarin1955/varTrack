@@ -12,12 +12,12 @@ bp = Blueprint('webhooks', __name__)
 @validate_route_param(param_name='datasource', transform_func=DataSourceFactory.get_available_datasources)
 def handler_webhooks(platform, datasource):
 
-    json_data = request.get_json()
+    json_payload = request.get_json()
     raw_payload = request.data.decode('utf-8')
     headers=dict(request.headers)
 
     task = webhook_handler.apply_async(
-        args=[platform, datasource, raw_payload, json_data, headers])
+        args=[platform, datasource, raw_payload, json_payload, headers])
 
     return jsonify({
         'status': 'accepted',
