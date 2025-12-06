@@ -3,59 +3,31 @@ import hmac
 import re
 from typing import Dict, Any, List, Optional
 
+from flask import jsonify
+
 from app.models.git_platform import GitPlatform
 from app.models.role import Role
+from app.utils.file_change import ChangeFile
 from app.utils.normalized_push import NormalizedPush
 
 
 class WebhooksHandler:
 
-    # @staticmethod
-    # def handle_webhook(platform, datasource, raw_payload, signature, event_type):
-        # secret = (current_app.config.get(platform))["secret"]
-        # if not WebhooksHandler.verify_signature(secret, raw_payload, signature):
-        #     return jsonify({'error': 'Invalid signature'}), 401
-        #
-        # if WebhooksHandler.is_push_event(event_type):
-        #     commits = WebhooksHandler.handle_push_event(raw_payload)
-        #
-        # elif WebhooksHandler.is_pr_event(event_type):
-        #     commits = WebhooksHandler.handle_pr_event(raw_payload)
-        #
-        # platform_instance= PlatformFactory.create(**current_app.config.get(platform))
-        #
-        # platform_instance.auth()
-        #
-        # new_file= platform_instance.get_file_from_commit()
-        #
-        # dsadapter_instance= DSAdapterFactory.create()
-        #
-        # validator = SchemaValidator(schema_dir="./schemas")
-        #
-        # # Validate single file
-        # # result = validator.validate_file("data/user_data.json")
-        #
-        #
-        #
-        # # invoker = CommandInvoker()
-        # #
-        # # print("=== Filesystem Commands ===")
-        # # invoker.execute_command(UpdateFileCommand(fs, "readme.txt", "Hello World"))
-        # # invoker.execute_command(UpdateFileCommand(fs, "readme.txt", "Hello World"))
-        #
-        # # redis_client = redis.Redis(host='localhost', port=6379, decode_responses=False)
-        # # redis_strategy = RedisAdapter(redis_client)
-        # #
-        # # # Create invoker
-        # # invoker = StorageInvoker()
-        # #
-        # # # Create and execute commands
-        # # insert_cmd = InsertCommand(redis_strategy, "user:1", "John Doe")
-        # # invoker.execute_command(insert_cmd)
+    @staticmethod
+    def handle_webhook(platform: GitPlatform, raw_payload, signature, event_type, secret, role: Role):
 
+        if not WebhooksHandler.verify_signature(secret, raw_payload, signature):
+            return jsonify({'error': 'Invalid signature'}), 401
 
+        change_files: List[ChangeFile] = []
 
+        if role.envAsPR and platform.is_pr_event(event_type):
+            change_files = platform.normalize_pr_payload(raw_payload)
+            return change_files
 
+        if platform.is_push_event(event_type):
+            change_files = platform.normalize_push_payload(raw_payload)
+            return change_files
 
     @staticmethod
     def verify_signature(secret, payload_body, signature_header):
@@ -93,18 +65,7 @@ class WebhooksHandler:
 
     @staticmethod
     def handle_push_event(payload: Dict[str, Any], platform_cls: GitPlatform, role_config: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """
-        Handle push event with Role-based filtering.
 
-        Args:
-            payload: The JSON payload from the webhook
-            platform_cls: The GitPlatform class used for normalization
-            role_config: The raw dictionary configuration for the Role
-
-        Returns:
-            List of dictionaries containing 'commit', 'file', 'env', and 'key' for valid changes.
-        """
-        # 1. Normalize payload (get all commits)
         normalized_push: NormalizedPush = platform_cls.normalize_push_payload(payload, file=None)
 
         # 2. Resolve Role configuration
@@ -117,7 +78,7 @@ class WebhooksHandler:
 
         # Apply overrides based on repository name
         repo_name = normalized_push.repository
-        role = base_role.get_effective_config(repo_name)
+        role = base_role.resolve_role_for_repo(repo_name)
 
         print(f"Processing Push for Repo: {repo_name} with Role strategy")
 

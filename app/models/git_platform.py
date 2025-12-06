@@ -55,6 +55,16 @@ class GitPlatform(BaseModel, ABC):
 
     @staticmethod
     @abstractmethod
+    def is_push_event(event_type):
+        pass
+
+    @staticmethod
+    @abstractmethod
+    def is_pr_event(event_type):
+        pass
+
+    @staticmethod
+    @abstractmethod
     def normalize_push_payload(payload: Dict[str, Any], file: Optional[str] = None):
         pass
 
