@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import List
+from typing import List, Set
 from app.utils.normalized_commit import NormalizedCommit
 
 @dataclass
@@ -17,3 +17,20 @@ class NormalizedPR:
     head_sha: str  # SHA of the head branch (after)
     is_approved: bool
     commits: List[NormalizedCommit] = field(default_factory=list)
+
+    def sort_commits(self, reverse: bool = True) -> None:
+        """
+        Args: reverse: If True, sort newest to oldest. Default False (oldest to newest).
+        """
+        self.commits.sort(
+            key=lambda c: c.timestamp.timestamp() if c.timestamp else 0.0,
+            reverse=reverse
+        )
+
+    def get_all_changed_files(self) -> Set[str]:
+        all_files = set()
+        for commit in self.commits:
+            # Uses the method we created in the previous step
+            all_files.update(commit.get_changed_files())
+
+        return all_files

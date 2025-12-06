@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import List
+from typing import List, Set
 
 
 @dataclass
@@ -21,3 +21,9 @@ class NormalizedCommit:
     def has_file_added(self, file_path: str) -> bool:
         """Check if a specific file was added"""
         return file_path in self.added
+
+    def get_changed_files(self) -> Set[str]:
+        """
+        Returns a unique set of all files that were added or modified in this commit.
+        """
+        return set(self.added + self.modified)
