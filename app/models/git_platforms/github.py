@@ -280,62 +280,6 @@ class GitHubSettings(GitPlatform):
             commits=[synthetic_commit]
         )
 
-    # def normalize_pr_payload(self, payload: Dict[str, Any], newest_first: bool = False) -> "NormalizedPR":
-    #     data = payload.get("payload", payload)
-    #     self.auth()
-    #
-    #     pr = data.get("pull_request", {})
-    #     base, head = pr.get("base", {}), pr.get("head", {})
-    #     repo_name = (data.get("repository") or base.get("repo") or {}).get("full_name", "")
-    #
-    #     # OPTIMIZATION: Use a single API call ('compare') to get both the Real Merge Base and Changed Files.
-    #     # This is significantly faster than calling get_merge_base() + get_pull().get_files() separately.
-    #     try:
-    #         repo = self._github_client.get_repo(repo_name)
-    #         # compare() calculates the diff from the common ancestor (3-dot diff)
-    #         diff = repo.compare(base.get("sha"), head.get("sha"))
-    #
-    #         base_sha = diff.merge_base_commit.sha
-    #         files = diff.files
-    #     except Exception as e:
-    #         print(f"Warning: API compare failed ({e}). Falling back to payload data.")
-    #         base_sha = base.get("sha", "")  # Fallback
-    #         files = []
-    #
-    #     # Sort files into categories
-    #     added, modified, removed = [], [], []
-    #     for f in files:
-    #         if f.status == "added":
-    #             added.append(f.filename)
-    #         elif f.status == "modified":
-    #             modified.append(f.filename)
-    #         elif f.status == "removed":
-    #             removed.append(f.filename)
-    #         elif f.status == "renamed":
-    #             added.append(f.filename)
-    #             if f.previous_filename: removed.append(f.previous_filename)
-    #
-    #     # Parse timestamp from payload (faster than parsing commit objects)
-    #     ts = None
-    #     if pr.get("updated_at"):
-    #         try:
-    #             ts = datetime.fromisoformat(pr["updated_at"].replace("Z", "+00:00"))
-    #         except ValueError:
-    #             pass
-    #
-    #     return NormalizedPR(
-    #         id=str(data.get("number") or pr.get("number") or ""),
-    #         action=data.get("action", ""),
-    #         repository=repo_name,
-    #         base_branch=base.get("ref", ""),
-    #         head_branch=head.get("ref", ""),
-    #         base_sha=base_sha,
-    #         target_branch_sha=base.get("sha", ""),
-    #         head_sha=head.get("sha", ""),
-    #         is_approved=bool(data.get("is_approved", False)),
-    #         commits=[NormalizedCommit(head.get("sha", ""), added, modified, removed, ts)]
-    #     )
-
     def get_merge_base(self, repo_name: str, base_sha: str, head_sha: str) -> Optional[str]:
         """
         Calculates the merge base (common ancestor) between two commits using GitHub Compare API.
@@ -425,7 +369,7 @@ class GitHubSettings(GitPlatform):
         return super().git_clone(schemas_repo)
 
     async def get_file_from_commit(self, repo_name: str, commit_hash: str, file_path: str) -> Optional[str]:
-        raw_url = f"https://github.com/{repo_name}/raw/{commit_hash}/{file_path}"
+        raw_url = f"https://raw.githubusercontent.com/{repo_name}/{commit_hash}/{file_path}"
         response = requests.get(raw_url)
         return response.text
 
