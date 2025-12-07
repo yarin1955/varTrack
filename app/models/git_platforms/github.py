@@ -11,7 +11,8 @@ from app.utils.factories.platform_factory import PlatformFactory
 from app.utils.normalized_commit import NormalizedCommit
 from app.utils.normalized_pr import NormalizedPR
 from app.utils.normalized_push import NormalizedPush
-
+import asyncio
+import base64
 
 @PlatformFactory.register()
 class GitHubSettings(GitPlatform):
@@ -44,15 +45,8 @@ class GitHubSettings(GitPlatform):
     def is_pr_event(event_type):
         return event_type == 'pull_request'
 
-    # @property
-    # def event_type_header(self):
-    #     return self._event_type_header
-
     def auth(self):
-        # Return cached client if already authenticated
-        # if self._github_client is not None:
-        #     return self._github_client
-        # Create new authentication
+
         if self.token:
             auth = Auth.Token(self.token)
         else:
@@ -368,8 +362,86 @@ class GitHubSettings(GitPlatform):
     def git_clone(self, schemas_repo: SchemaRegistry) -> None:
         return super().git_clone(schemas_repo)
 
+    # async def get_file_from_commit(self, repo_name: str, commit_hash: str, file_path: str) -> Optional[str]:
+    #     raw_url = f"https://raw.githubusercontent.com/{repo_name}/{commit_hash}/{file_path}"
+    #     response = requests.get(raw_url)
+    #     return response.text
+
     async def get_file_from_commit(self, repo_name: str, commit_hash: str, file_path: str) -> Optional[str]:
-        raw_url = f"https://raw.githubusercontent.com/{repo_name}/{commit_hash}/{file_path}"
-        response = requests.get(raw_url)
-        return response.text
+        """
+        Asynchronously get file content from a specific commit.
+        - Uses get_contents for small files (<1MB).
+        - Falls back to Git Blob API for larger files (>1MB).
+        - Decodes as UTF-8 (text only).
+        """
+        if not hasattr(self, '_github_client') or not self._github_client:
+            self.auth()
+
+        def _fetch_sync():
+            try:
+                repo = self._github_client.get_repo(repo_name)
+
+                # --- ATTEMPT 1: Standard API (Fast, but <1MB limit) ---
+                try:
+                    # get_contents returns ContentFile or list[ContentFile]
+                    content = repo.get_contents(file_path, ref=commit_hash)
+
+                    if isinstance(content, list):
+                        print(f"Error: {file_path} is a directory.")
+                        return None
+
+                    # If successful, decode and return
+                    return content.decoded_content.decode('utf-8')
+
+                except GithubException as e:
+                    # Check if the error is specifically because the file is too large
+                    # GitHub API returns 403 for "content too large"
+                    is_too_large = (e.status == 403 and
+                                    isinstance(e.data, dict) and
+                                    any('too large' in err.get('message', '').lower()
+                                        for err in e.data.get('errors', [])))
+
+                    if not is_too_large:
+                        raise e  # Reraise if it's a permission/connection error, not size
+
+                    # --- ATTEMPT 2: Blob API (Slower setup, supports up to 100MB) ---
+                    print(f"File {file_path} is >1MB. Switching to Blob API...")
+
+                    # 1. We need the file's SHA. We get this from the Git Tree.
+                    # recursive=True ensures we find files deep in folders.
+                    tree = repo.get_git_tree(commit_hash, recursive=True)
+
+                    # 2. Find the specific file entry in the tree
+                    blob_sha = None
+                    for element in tree.tree:
+                        if element.path == file_path:
+                            blob_sha = element.sha
+                            break
+
+                    if not blob_sha:
+                        print(f"Error: Could not find SHA for {file_path} in tree.")
+                        return None
+
+                    # 3. Fetch the blob using the SHA
+                    blob = repo.get_git_blob(blob_sha)
+
+                    # 4. Decode content (Blobs are Base64 encoded)
+                    # content is the raw base64 string, encoding is usually 'base64'
+                    if blob.encoding == 'base64':
+                        byte_content = base64.b64decode(blob.content)
+                        return byte_content.decode('utf-8')
+                    else:
+                        # Fallback if GitHub returns it differently (rare for blobs)
+                        return blob.content
+
+            except UnicodeDecodeError:
+                print(f"Error: '{file_path}' is binary, not text.")
+                return None
+            except Exception as e:
+                print(f"Error fetching '{file_path}': {e}")
+                return None
+
+        # Run in thread pool to prevent blocking the async loop
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, _fetch_sync)
 
