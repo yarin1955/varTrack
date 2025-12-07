@@ -67,7 +67,7 @@ def data_manager(self, platform_config: dict, datasource_config: dict, items_dic
             before_sha = items_dict.get('before')
 
     except Exception as e:
-        print(f"❌ Error reconstructing objects: {e}")
+        print(f"Error reconstructing objects: {e}")
         return {'status': 'error', 'message': f"Deserialization failed: {e}"}
 
     # 2. Initialize Platform
@@ -75,7 +75,7 @@ def data_manager(self, platform_config: dict, datasource_config: dict, items_dic
         platform_loader(platform_name, GitPlatform)
         platform_instance = PlatformFactory.create(**platform_config)
     except Exception as e:
-        print(f"❌ Error initializing platform '{platform_name}': {e}")
+        print(f"Error initializing platform '{platform_name}': {e}")
         return {'status': 'error', 'message': str(e)}
 
     # 3. Initialize & Connect to Datasource
@@ -115,7 +115,7 @@ def data_manager(self, platform_config: dict, datasource_config: dict, items_dic
                 break
 
         if not last_commit_hash:
-            print(f"   ⚠️ Could not find commit for file {file_path}")
+            print(f"Could not find commit for file {file_path}")
             continue
 
         files_to_process.append({
