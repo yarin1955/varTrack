@@ -89,6 +89,43 @@ class MongoDocumentStrategy(IStorageStrategy):
         except PyMongoError as e:
             raise RuntimeError(f"Failed to update document: {str(e)}")
 
+    def upsert(self, collection: Collection, data: Dict[str, Any]) -> None:
+        """
+        Atomic Upsert:
+        - If _id exists: Update the document (overwrite fields).
+        - If _id missing in DB: Create the document.
+        - If _id missing in data: Standard insert.
+        """
+        try:
+            doc_id = data.get("_id")
+
+            # Without an ID, we cannot 'update', so we must insert.
+            if not doc_id:
+                self.insert(collection, data)
+                return
+
+            # Separate _id from the fields to modify
+            fields_to_set = {k: v for k, v in data.items() if k != "_id"}
+
+            # If the document is JUST an _id, ensure it gets created
+            if not fields_to_set:
+                collection.update_one(
+                    {"_id": doc_id},
+                    {"$setOnInsert": {"_id": doc_id}},  # Do nothing if exists, create if missing
+                    upsert=True
+                )
+                return
+
+            # Perform the Atomic Upsert
+            collection.update_one(
+                filter={"_id": doc_id},
+                update={"$set": fields_to_set},
+                upsert=True
+            )
+
+        except PyMongoError as e:
+            raise RuntimeError(f"Failed to upsert document: {str(e)}")
+
     def delete(self, collection: Collection, query: Dict[str, Any]) -> bool:
         """
         Delete document(s) matching the query.

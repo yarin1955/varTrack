@@ -16,16 +16,9 @@ class WebhooksHandler:
     @staticmethod
     def handle_webhook(platform: GitPlatform, raw_payload, json_payload, headers, role: Role):
 
-        secret = platform.secret
-
         event_type_header = platform.event_type_header
-        signature_header = platform.git_scm_signature
 
         event_type = headers.get(event_type_header)
-        signature = headers.get(signature_header)
-
-        if not WebhooksHandler.verify_signature(secret, raw_payload, signature):
-            return jsonify({'error': 'Invalid signature'}), 401
 
         change_files: List[ChangeFile] = []
         if role["envAsPR"] and platform.is_pr_event(event_type):

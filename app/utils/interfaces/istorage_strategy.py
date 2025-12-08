@@ -11,6 +11,11 @@ class IStorageStrategy(ABC):
         pass
 
     @abstractmethod
+    def upsert(self, *args: Any, **kwargs: Any) -> None:
+        """Insert data into storage."""
+        pass
+
+    @abstractmethod
     def get(self, *args: Any, **kwargs: Any) -> Any:
         """Retrieve data from storage."""
         pass

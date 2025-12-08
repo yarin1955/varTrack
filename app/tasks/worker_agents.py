@@ -36,7 +36,7 @@ def worker_agent_task(self):
 def data_manager(self, platform_config: dict, datasource_config: dict, items_dict: dict, role_dict: dict):
     """
     Processes the NormalizedPush/NormalizedPR object.
-    Accepts serialized configs to avoid using current_app context.
+    OPTIMIZED: Fetches all file contents concurrently before processing.
     """
 
     platform_name = platform_config.get('name', 'unknown')
@@ -67,21 +67,19 @@ def data_manager(self, platform_config: dict, datasource_config: dict, items_dic
             before_sha = items_dict.get('before')
 
     except Exception as e:
-        print(f"❌ Error reconstructing objects: {e}")
+        print(f"Error reconstructing objects: {e}")
         return {'status': 'error', 'message': f"Deserialization failed: {e}"}
 
     # 2. Initialize Platform
     try:
-        # Use passed config directly
         platform_loader(platform_name, GitPlatform)
         platform_instance = PlatformFactory.create(**platform_config)
     except Exception as e:
-        print(f"❌ Error initializing platform '{platform_name}': {e}")
+        print(f"Error initializing platform '{platform_name}': {e}")
         return {'status': 'error', 'message': str(e)}
 
     # 3. Initialize & Connect to Datasource
     try:
-        # Use passed config directly
         ds_loader(datasource_name, DataSource)
         ds_adapter_loader(datasource_name, DataSourceAdapter)
         datasource_instance = DataSourceFactory.create(**datasource_config)
@@ -98,18 +96,16 @@ def data_manager(self, platform_config: dict, datasource_config: dict, items_dic
     repo_name = actionable_items.repository
     ref = actionable_items.branch if hasattr(actionable_items, 'branch') else actionable_items.head_branch
 
-    processed_count = 0
     print(f"Processing {len(all_files)} potential files in {repo_name}")
 
-    # 5. Loop matched files
-    for file_path in all_files:
+    # --- PHASE 1: IDENTIFY WORK ---
+    files_to_process = []
 
+    for file_path in all_files:
         # A. Match File
         match_context = WebhooksHandler._match_file_to_role(file_path, ref, role)
         if not match_context:
             continue
-
-        print(f" -> Matched file: {file_path} (Env: {match_context.get('env')})")
 
         # B. Find Last Commit
         last_commit_hash = None
@@ -119,27 +115,65 @@ def data_manager(self, platform_config: dict, datasource_config: dict, items_dic
                 break
 
         if not last_commit_hash:
-            print(f"   ⚠️ Could not find commit for file {file_path}")
+            print(f"Could not find commit for file {file_path}")
             continue
 
-        try:
-            # C. Fetch Content
-            # 1. New Content
-            current_file_content = asyncio.run(platform_instance.get_file_from_commit(
-                repo_name,
-                last_commit_hash,
-                file_path
+        files_to_process.append({
+            'file_path': file_path,
+            'last_commit_hash': last_commit_hash,
+            'match_context': match_context
+        })
+
+    if not files_to_process:
+        return {'status': 'success', 'message': 'No matching files found to process'}
+
+    # --- PHASE 2: CONCURRENT FETCHING ---
+    async def fetch_all_contents():
+        tasks = []
+        for item in files_to_process:
+            # Task for Current Content
+            tasks.append(platform_instance.get_file_from_commit(
+                repo_name, item['last_commit_hash'], item['file_path']
             ))
 
-            # 2. Old Content
-            previous_file_content = None
+            # Task for Previous Content (if applicable)
             if before_sha:
-                previous_file_content = asyncio.run(platform_instance.get_file_from_commit(
-                    repo_name,
-                    before_sha,
-                    file_path
+                tasks.append(platform_instance.get_file_from_commit(
+                    repo_name, before_sha, item['file_path']
                 ))
+            else:
+                # Dummy task to keep indices aligned
+                async def _noop():
+                    return None
 
+                tasks.append(_noop())
+
+        return await asyncio.gather(*tasks)
+
+    try:
+        # Execute all network calls in parallel
+        print(f"🚀 Fetching content for {len(files_to_process)} files concurrently...")
+        fetch_results = asyncio.run(fetch_all_contents())
+    except Exception as e:
+        print(f"❌ Error during concurrent fetch: {e}")
+        return {'status': 'error', 'message': f"Fetch failed: {e}"}
+
+    # --- PHASE 3: PROCESS & INSERT ---
+    processed_count = 0
+
+    # fetch_results contains [file1_curr, file1_prev, file2_curr, file2_prev, ...]
+    for i, item in enumerate(files_to_process):
+        file_path = item['file_path']
+        match_context = item['match_context']
+        last_commit_hash = item['last_commit_hash']
+
+        # Extract results based on index
+        current_file_content = fetch_results[i * 2]
+        previous_file_content = fetch_results[(i * 2) + 1]
+
+        print(f" -> Processing: {file_path} (Env: {match_context.get('env')})")
+
+        try:
             # D. Parse & Flatten
             current_obj = "{}"
             if current_file_content:
@@ -152,23 +186,14 @@ def data_manager(self, platform_config: dict, datasource_config: dict, items_dic
             current_matches = find_key_iterative(current_obj, "varTrack")
             previous_matches = find_key_iterative(previous_obj, "varTrack")
 
-
             current_flattened_data = flatten_dfs(current_matches)
             previous_flattened_data = flatten_dfs(previous_matches)
 
             # E. Compare
             state_comparison = compare_states(current_data=current_flattened_data, old_data=previous_flattened_data)
-
-            payload = {
-                "key": match_context.get('key'),
-                "env": match_context.get('env'),
-                "file": file_path,
-                "last_commit": last_commit_hash,
-                "changes": state_comparison
-            }
-
-            # F. Insert
-            ds_adapter.insert(payload)
+            upsert_data = state_comparison['added'] | {k: v['new'] for k, v in state_comparison['changed'].items()}
+            ds_adapter.upsert(upsert_data)
+            ds_adapter.delete(state_comparison['deleted'])
             processed_count += 1
 
         except Exception as e:
