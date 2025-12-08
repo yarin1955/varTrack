@@ -54,62 +54,21 @@ class MongoAdapter(DataSourceAdapter):
         # Pass the collection object, not the string
         self._strategy.insert(self._collection, data)
 
-    def get(self, *args: Any, **kwargs: Any) -> Any:
+    def upsert(self, data: Any) -> None:
+
+        if self._collection is None:
+            raise RuntimeError("Not connected to MongoDB. Call connect() first.")
+
+        self._strategy.upsert(self._collection, data)
+
+    def get(self, data) -> Any:
         """Dispatch get based on arguments."""
-        if len(args) == 2 and isinstance(args[1], dict):
-            return self._get_document(args[0], args[1])
-        elif len(args) == 1:
-            return self._get_file(args[0])
+        self._strategy.get(self._collection, data)
 
-    def update(self, *args: Any, **kwargs: Any) -> None:
-        """Dispatch update based on arguments."""
-        if len(args) == 3 and isinstance(args[2], dict):
-            self._update_document(args[0], args[1], args[2])
-        elif len(args) == 2 and isinstance(args[1], bytes):
-            self._update_file(args[0], args[1])
+    def update(self, data) -> Any:
+        """Dispatch get based on arguments."""
+        self._strategy.update(self._collection, data)
 
-    def delete(self, *args: Any, **kwargs: Any) -> None:
-        """Dispatch delete based on arguments."""
-        if len(args) == 2 and isinstance(args[1], dict):
-            self._delete_document(args[0], args[1])
-        elif len(args) == 1:
-            self._delete_file(args[0])
-
-    def _insert_document(self, collection: str, document: dict) -> None:
-        """Insert document into collection."""
-        self.db[collection].insert_one(document)
-
-    def _get_document(self, collection: str, query: dict) -> dict | None:
-        """Find one document matching query."""
-        return self.db[collection].find_one(query)
-
-    def _update_document(self, collection: str, query: dict, update: dict) -> None:
-        """Update one document matching query."""
-        self.db[collection].update_one(query, {"$set": update})
-
-    def _delete_document(self, collection: str, query: dict) -> None:
-        """Delete documents matching query using delete_many."""
-        self.db[collection].delete_many(query)
-
-    def _insert_file(self, path: str, content: bytes) -> None:
-        """Store file in GridFS."""
-        self.fs.put(content, filename=path)
-
-    def _get_file(self, path: str) -> bytes | None:
-        """Retrieve file from GridFS by filename."""
-        try:
-            grid_out = self.fs.find_one({"filename": path})
-            return grid_out.read() if grid_out else None
-        except Exception:
-            return None
-
-    def _update_file(self, path: str, content: bytes) -> None:
-        """Replace file content by deleting old and inserting new."""
-        self._delete_file(path)
-        self._insert_file(path, content)
-
-    def _delete_file(self, path: str) -> None:
-        """Delete file from GridFS by filename."""
-        grid_out = self.fs.find_one({"filename": path})
-        if grid_out:
-            self.fs.delete(grid_out._id)
+    def delete(self, data) -> Any:
+        """Dispatch get based on arguments."""
+        self._strategy.delete(self._collection, data)

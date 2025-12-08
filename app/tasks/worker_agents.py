@@ -191,17 +191,9 @@ def data_manager(self, platform_config: dict, datasource_config: dict, items_dic
 
             # E. Compare
             state_comparison = compare_states(current_data=current_flattened_data, old_data=previous_flattened_data)
-
-            payload = {
-                "key": match_context.get('key'),
-                "env": match_context.get('env'),
-                "file": file_path,
-                "last_commit": last_commit_hash,
-                "changes": state_comparison
-            }
-
-            # F. Insert
-            ds_adapter.insert(payload)
+            upsert_data = state_comparison['added'] | {k: v['new'] for k, v in state_comparison['changed'].items()}
+            ds_adapter.upsert(upsert_data)
+            ds_adapter.delete(state_comparison['deleted'])
             processed_count += 1
 
         except Exception as e:

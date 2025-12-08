@@ -182,6 +182,27 @@ class MongoFileStrategy(IStorageStrategy):
         except Exception as e:
             raise RuntimeError(f"Failed to update file: {str(e)}")
 
+    def upsert(self, collection: Collection, data: Dict[str, Any]) -> None:
+        """
+        File Upsert:
+        GridFS does not support atomic updates.
+        We must check/delete the old file by 'filename', then insert the new one.
+        """
+        filename = data.get("filename")
+        if not filename:
+            raise ValueError("File upsert requires 'filename' in data")
+
+        try:
+            # 1. Check/Delete existing file(s) with this filename
+            # (We use delete logic to clear the way)
+            self.delete(collection, {"filename": filename})
+
+            # 2. Insert the new file
+            self.insert(collection, data)
+
+        except Exception as e:
+            raise RuntimeError(f"Failed to upsert file '{filename}': {str(e)}")
+
     def delete(self, collection: Collection, query: Dict[str, Any]) -> bool:
         """
         Delete a file from GridFS.
