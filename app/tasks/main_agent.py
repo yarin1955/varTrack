@@ -1,5 +1,5 @@
 from app.celery_app import celery as celery_app
-from .worker_agents import worker_agent_task, data_manager
+from .worker_agents import data_manager
 from flask import current_app
 from app.utils.handlers.webhooks import WebhooksHandler
 from app.utils.factories.platform_factory import PlatformFactory
@@ -7,25 +7,6 @@ from ..models.git_platform import GitPlatform
 from app.models.git_platforms import load_module as platform_loader
 from ..models.role import Role
 from dataclasses import asdict
-
-@celery_app.task(name='app.main_agent_task', bind=True)
-def main_agent_task(self, num_workers=1):
-    """Main agent that creates worker agents without blocking on .get()."""
-
-    worker_task_ids = []
-
-    # Create worker agent(s) asynchronously and collect task IDs
-    for i in range(num_workers):
-        res = worker_agent_task.apply_async()
-        worker_task_ids.append(res.id)
-
-    # Do NOT call res.get() here – let HTTP layer handle waiting/aggregation
-    return {
-        'main_task_id': self.request.id,
-        'agent_type': 'main',
-        'workers_created': num_workers,
-        'worker_task_ids': worker_task_ids,
-    }
 
 
 @celery_app.task(name='app.webhook_handler', bind=True, queue='main_agent')

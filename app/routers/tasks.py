@@ -1,5 +1,4 @@
 from flask import Blueprint, request, jsonify
-from ..tasks.main_agent import main_agent_task
 from ..celery_app import celery
 
 bp = Blueprint('tasks', __name__)
