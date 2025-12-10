@@ -45,6 +45,11 @@ def init_celery(app):
         'accept_content': ['task-json', 'json'],
         'timezone': 'UTC',
         'enable_utc': True,
+        'task_acks_late': True,
+        'task_reject_on_worker_lost': True,
+        'worker_prefetch_multiplier': 1,
+        'task_time_limit': 900,
+        'task_soft_time_limit': 840,
         'task_routes': {
             'app.main_agent_task': {'queue': 'main_agent'},
             'app.worker_agent_task': {'queue': 'worker_agents'},
@@ -53,14 +58,16 @@ def init_celery(app):
         },
         'workers': {
             'main': {
-                'worker_max_tasks_per_child': None,
-                'worker_concurrency': 1,
+                'worker_max_tasks_per_child': 1000,  # Recycle occasionally to be safe
+                'worker_concurrency': 10,
+                'worker_pool': 'gevent',
                 'worker_queues': ['main_agent'],
             },
             'worker': {
-                'worker_max_tasks_per_child': 1,
-                'worker_concurrency': 4,
-                'worker_queues': ['worker_agents'],
+                'worker_max_tasks_per_child': 100,
+                'worker_concurrency': 20,
+                'worker_pool': 'gevent',
+                'worker_queues': ['worker_agents']
             }
         }
     }

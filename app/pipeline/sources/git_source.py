@@ -1,4 +1,4 @@
-import asyncio
+import gevent
 from typing import List, Dict, Any
 from app.pipeline.core import Source
 from app.models.git_platform import GitPlatform
@@ -18,34 +18,39 @@ class GitSource(Source):
         self.files = files_to_process
         self.before_sha = before_sha
 
-    async def read(self) -> List[Dict[str, Any]]:
+    def read(self) -> List[Dict[str, Any]]:
         """
-        Concurrent fetch of Current and Previous file contents.
+        Concurrent fetch of Current and Previous file contents using Gevent.
         Returns a list of dicts: {'current': str, 'previous': str, 'metadata': dict}
         """
-        tasks = []
+        jobs = []
 
-        # 1. Create all fetch tasks (2 per file: current & previous)
+        # 1. Spawn greenlets for all fetch tasks (2 per file: current & previous)
         for item in self.files:
             # Task A: Get Current Content
-            tasks.append(self.platform.get_file_from_commit(
+            jobs.append(gevent.spawn(
+                self.platform.get_file_from_commit,
                 self.repo, item['last_commit_hash'], item['file_path']
             ))
 
             # Task B: Get Previous Content
             if self.before_sha:
-                tasks.append(self.platform.get_file_from_commit(
+                jobs.append(gevent.spawn(
+                    self.platform.get_file_from_commit,
                     self.repo, self.before_sha, item['file_path']
                 ))
             else:
-                tasks.append(self._noop())
+                jobs.append(gevent.spawn(self._noop))
 
         # 2. Execute all network calls in parallel
-        print(f"🚀 [GitSource] Fetching {len(tasks)} file versions concurrently...")
-        raw_results = await asyncio.gather(*tasks)
+        print(f"🚀 [GitSource] Fetching {len(jobs)} file versions concurrently...")
+        gevent.joinall(jobs)
 
         # 3. Pair results back to files
         results = []
+        # Get all results in order from the jobs list
+        raw_results = [job.value for job in jobs]
+
         for i, item in enumerate(self.files):
             curr_content = raw_results[i * 2]
             prev_content = raw_results[(i * 2) + 1]
@@ -59,5 +64,5 @@ class GitSource(Source):
 
         return results
 
-    async def _noop(self):
+    def _noop(self):
         return None
