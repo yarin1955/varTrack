@@ -1,4 +1,3 @@
-import asyncio
 import json
 from datetime import datetime
 from pydantic import ValidationError
@@ -87,9 +86,10 @@ def data_manager(self, platform_config: dict, datasource_config: dict, items_dic
     # (This logic remains here because it decides *what* files to fetch)
     repo_config_data = {}
     try:
-        repo_config_content = asyncio.run(platform_instance.get_file_from_commit(
+        # GEVEVT CHANGE: Removed asyncio.run()
+        repo_config_content = platform_instance.get_file_from_commit(
             repo_name, commit_sha, ".vartrack.json"
-        ))
+        )
         if repo_config_content:
             repo_config_data = json.loads(repo_config_content)
     except Exception:
@@ -106,7 +106,8 @@ def data_manager(self, platform_config: dict, datasource_config: dict, items_dic
     if all_extends:
         try:
             resolver = PresetResolver(platform_instance)
-            resolved_presets = asyncio.run(resolver.resolve_all(all_extends))
+            # GEVENT CHANGE: Removed asyncio.run()
+            resolved_presets = resolver.resolve_all(all_extends)
         except Exception:
             pass
 
@@ -200,7 +201,8 @@ def data_manager(self, platform_config: dict, datasource_config: dict, items_dic
 
     try:
         # A. SOURCE: Parallel Read
-        file_results = asyncio.run(source.read())
+        # GEVENT CHANGE: Removed asyncio.run()
+        file_results = source.read()
 
         for item in file_results:
             try:

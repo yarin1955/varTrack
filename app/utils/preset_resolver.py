@@ -17,7 +17,7 @@ class PresetResolver:
     def __init__(self, platform_instance: GitPlatform):
         self.platform = platform_instance
 
-    async def fetch_preset(self, preset_str: str) -> Dict[str, Any]:
+    def fetch_preset(self, preset_str: str) -> Dict[str, Any]:
         match = self.PRESET_REGEX.match(preset_str)
         if not match:
             print(f"⚠️ Invalid preset format: {preset_str}")
@@ -45,9 +45,9 @@ class PresetResolver:
         # We'll try fetching from 'main' or 'master' if platform requires branch
         # Assuming get_file_from_commit can take a branch name
 
-        content = await self.platform.get_file_from_commit(repo, "main", filename)
+        content = self.platform.get_file_from_commit(repo, "main", filename)
         if not content:
-            content = await self.platform.get_file_from_commit(repo, "master", filename)
+            content = self.platform.get_file_from_commit(repo, "master", filename)
 
         if content:
             try:
@@ -57,10 +57,10 @@ class PresetResolver:
 
         return {}
 
-    async def resolve_all(self, extends_list: List[str]) -> List[Dict[str, Any]]:
+    def resolve_all(self, extends_list: List[str]) -> List[Dict[str, Any]]:
         resolved_presets = []
         for preset_str in extends_list:
-            config = await self.fetch_preset(preset_str)
+            config = self.fetch_preset(preset_str)
             if config:
                 resolved_presets.append(config)
         return resolved_presets
