@@ -4,7 +4,6 @@ from flask import current_app
 from app.utils.handlers.webhooks import WebhooksHandler
 from app.utils.factories.platform_factory import PlatformFactory
 from ..models.git_platform import GitPlatform
-from app.models.git_platforms import load_module as platform_loader
 from ..models.role import Role
 from dataclasses import asdict
 
@@ -13,7 +12,6 @@ from dataclasses import asdict
 def webhook_handler(self, platform, datasource, raw_payload, json_payload, headers):
     try:
         # Load Platform Class & Config
-        platform_cls = platform_loader(f"{platform}", GitPlatform)
         platform_config = current_app.config.get(platform)
         if not platform_config:
             raise ValueError(f"Configuration for platform '{platform}' not found.")

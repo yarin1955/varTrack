@@ -1,6 +1,5 @@
 from app.models.git_platform import GitPlatform
 from app.utils.interfaces.ifactory import IFactory
-
 class PlatformFactory(IFactory):
 
     @classmethod
@@ -18,20 +17,16 @@ class PlatformFactory(IFactory):
     @classmethod
     def get_available_platforms(cls):
         return super().get_registry_keys()
-    
-    # @classmethod
-    # def get_union_type(cls):
-    #     return super().get_union_type()
 
     @classmethod
     def load_module(cls, name: str):
-        return super().load_module(name)
+        # 1. Lazy Import: Only import the package when we actually need to load a plugin
+        from app.models import git_platforms
 
-
-    # @classmethod
-    # def aaa(self):
-    #     builder: Platform = xx.auth()
-    #     if students.schemas.platform == raw.name:
-    #         builder = builder.git_clone(students.schemas)
-    #     builder = builder.create_webhooks().closed()
+        # 2. Delegate: Use the helper inherited from IFactory
+        cls._load_class_from_package_module(
+            module_name=name,
+            package_module=git_platforms,  # Pass the module object
+            expected_base_class=GitPlatform
+        )
 

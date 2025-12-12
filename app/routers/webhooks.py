@@ -2,9 +2,8 @@ from flask import Blueprint, current_app,request, jsonify
 from app.middlewares.webhooks import validate_route_param
 from app.utils.factories.datasource_factory import DataSourceFactory
 from app.utils.factories.platform_factory import PlatformFactory
-from ..tasks.main_agent import webhook_handler
 from ..utils.handlers.webhooks import WebhooksHandler
-
+from app.tasks.main_agent import webhook_handler
 bp = Blueprint('webhooks', __name__)
 
 @bp.post("<string:platform>/<string:datasource>")

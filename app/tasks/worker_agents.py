@@ -14,9 +14,7 @@ from app.utils.factories.datasource_factory import DataSourceFactory
 from app.utils.factories.ds_adapter_factory import DSAdapterFactory
 from app.utils.factories.platform_factory import PlatformFactory
 from app.utils.handlers.webhooks import WebhooksHandler
-from app.models.datasources import load_module as ds_loader
-from app.models.datasources_adapters import load_module as ds_adapter_loader
-from app.models.git_platforms import load_module as platform_loader
+
 from app.business_logic.config_merger import resolve_config
 from app.utils.preset_resolver import PresetResolver
 

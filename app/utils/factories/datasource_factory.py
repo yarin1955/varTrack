@@ -16,8 +16,16 @@ class DataSourceFactory(IFactory):
         return super().create(*args, **kwargs)
 
     @classmethod
-    def create_adapter(cls, *args, **kwargs) -> DataSource:
-        return super().create(*args, **kwargs)
+    def load_module(cls, name: str):
+        # 1. Lazy Import
+        from app.models import datasources
+
+        # 2. Delegate
+        cls._load_class_from_package_module(
+            module_name=name,
+            package_module=datasources,  # Pass the module object
+            expected_base_class=DataSource
+        )
 
     @classmethod
     def get_registry(cls) -> dict[str, type]:
