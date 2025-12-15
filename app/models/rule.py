@@ -10,7 +10,7 @@ class RepositoryOverride(BaseModel):
 
     model_config = ConfigDict(extra="allow")
 
-class Role(BaseModel):
+class Rule(BaseModel):
     platform: str
     datasource: str
     fileName: Optional[str] = None
@@ -122,7 +122,7 @@ class Role(BaseModel):
 
         return self
 
-    def resolve_role_for_repo(self, repo_name: str) -> 'Role':
+    def resolve_rule_for_repo(self, repo_name: str) -> 'Role':
         if not self.overrides:
             return self
 
@@ -146,4 +146,4 @@ class Role(BaseModel):
             )
             final_config.update(updates)
 
-            return Role(**final_config)
+            return Rule(**final_config)
