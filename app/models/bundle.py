@@ -2,17 +2,21 @@ from typing import List, Any
 from pydantic import BaseModel, ConfigDict, field_validator
 
 from app.models.datasource import DataSource
+# Import your GitPlatform and other dependencies
 from app.models.git_platform import GitPlatform
-from app.models.role import Role
+
+from typing import List, Any
+from pydantic import BaseModel, ConfigDict, field_validator
+# Import your GitPlatform and other dependencies
+from app.models.git_platform import GitPlatform
+from app.models.rule import Rule
 from app.models.schema_registry import SchemaRegistry
 
-from app.utils.factories.datasource_factory import DataSourceFactory
-from app.utils.factories.platform_factory import PlatformFactory
 
 class Bundle(BaseModel):
     platforms: List[GitPlatform]
     datasources: List[DataSource]
-    roles: List[Role]
+    rules: List[Rule]
     schema_registry: SchemaRegistry
 
     model_config = ConfigDict(
@@ -24,9 +28,16 @@ class Bundle(BaseModel):
     @classmethod
     def resolve_platforms(cls, v: Any):
         out = []
+
+        # Ensure input is iterable
+        if not isinstance(v, list):
+            return v
+
         for item in v:
             if isinstance(item, dict):
-                instance = PlatformFactory.create(**item)
+                # This calls GitPlatform.create(name="github", ...)
+                # Because of the fix in IFactory, 'name' is passed to the Pydantic init.
+                instance = GitPlatform.create(**item)
                 out.append(instance)
             else:
                 out.append(item)
@@ -36,9 +47,17 @@ class Bundle(BaseModel):
     @classmethod
     def resolve_datasources(cls, v: Any):
         out = []
+
+        # Ensure input is iterable
+        if not isinstance(v, list):
+            return v
+
         for item in v:
             if isinstance(item, dict):
-                instance = DataSourceFactory.create(**item)
+                # This calls GitPlatform.create(name="github", ...)
+                # Because of the fix in IFactory, 'name' is passed to the Pydantic init.
+                instance = DataSource.create(**item)
                 out.append(instance)
-            else:                out.append(item)
+            else:
+                out.append(item)
         return out

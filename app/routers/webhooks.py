@@ -1,14 +1,16 @@
 from flask import Blueprint, current_app,request, jsonify
 from app.middlewares.webhooks import validate_route_param
-from app.utils.factories.datasource_factory import DataSourceFactory
-from app.utils.factories.platform_factory import PlatformFactory
+from ..models.datasource import DataSource
+from ..models.git_platform import GitPlatform
 from ..utils.handlers.webhooks import WebhooksHandler
 from app.tasks.main_agent import webhook_handler
+from ..utils.interfaces.isource import ISource
+
 bp = Blueprint('webhooks', __name__)
 
 @bp.post("<string:platform>/<string:datasource>")
-@validate_route_param(param_name='platform', transform_func=PlatformFactory.get_available_platforms)
-@validate_route_param(param_name='datasource', transform_func=DataSourceFactory.get_available_datasources)
+@validate_route_param(param_name='platform', transform_func=GitPlatform.get_registry_keys)
+@validate_route_param(param_name='datasource', transform_func=DataSource.get_registry_keys)
 def handler_webhooks(platform, datasource):
 
     json_payload = request.get_json()
@@ -20,7 +22,7 @@ def handler_webhooks(platform, datasource):
         return jsonify({'status': 'error', 'message': 'Server configuration error'}), 500
 
     try:
-        platform_instance = PlatformFactory.create(**platform_config)
+        platform_instance = GitPlatform.create(**platform_config)
         signature = headers.get(platform_instance.git_scm_signature)
 
         if not WebhooksHandler.verify_signature(platform_instance.secret, raw_payload, signature):

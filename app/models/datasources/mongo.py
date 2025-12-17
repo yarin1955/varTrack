@@ -5,10 +5,7 @@ from pydantic import Field, field_validator, model_validator, ConfigDict
 
 from app.models.datasource import DataSource
 from app.utils.enums.strategy_type import StrategyEnum
-from app.utils.factories.datasource_factory import DataSourceFactory
 
-
-@DataSourceFactory.register()
 class MongoConfig(DataSource):
     model_config = ConfigDict(
         extra="forbid",  # ignore unknown fields

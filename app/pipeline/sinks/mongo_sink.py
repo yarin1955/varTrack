@@ -59,3 +59,37 @@ class MongoSink(Sink):
             print(f"❌ [MongoSink] Flush failed: {e}")
         finally:
             self._buffer.clear()
+
+
+    # def __init__(self, config: MongoConfig):
+    #     self._config = config
+    #     self._strategy = self._select_strategy(config)
+    #     self._client = None
+    #     self._collection = None  # Add this to store the collection object
+    #
+    # def _select_strategy(self, config: MongoConfig) -> IStorageStrategy:
+    #     if config.update_strategy == StrategyEnum.FILE:
+    #         return MongoFileStrategy()
+    #     return MongoDocumentStrategy()
+    #
+    # def connect(self):
+    #     try:
+    #         from pymongo import MongoClient
+    #         from pymongo.errors import ConnectionFailure, ConfigurationError
+    #
+    #         options = self._config.get_pymongo_options()
+    #         self._client = MongoClient(**options)
+    #         self._client.admin.command('ping')
+    #
+    #         # Get the actual collection object
+    #         db = self._client[self._config.database]  # Assuming config has database name
+    #         self._collection = db[self._config.collection]
+    #
+    #         return self._client
+    #
+    #     except ConnectionFailure as e:
+    #         raise ConnectionError(f"Failed to connect to MongoDB: {str(e)}")
+    #     except ConfigurationError as e:
+    #         raise ValueError(f"Invalid MongoDB configuration: {str(e)}")
+    #     except Exception as e:
+    #         raise ConnectionError(f"Unexpected error connecting to MongoDB: {str(e)}")

@@ -1,71 +1,78 @@
-import importlib
+from abc import ABC
+from typing import Dict, Type, List, Optional
 from types import ModuleType
-from typing import Union, Optional, Type, TypeVar
-import importlib.util
-import sys
-from abc import ABC, abstractmethod
-from pathlib import Path
 
-from app.utils.class_loader import load_class_from_package_module
 
-T = TypeVar('T')
 class IFactory(ABC):
+    # Registry to hold subclass references
+    _registry: Dict[str, Type] = {}
 
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
-        cls._registry: dict[str, type] = {}
 
-    @classmethod
-    @abstractmethod
-    def register(cls):
-        def decorator(chosen_cls: type) -> type:
-            name = chosen_cls.__module__.rsplit('.', 1)[-1]
-            # Check for duplicates (optional but often helpful)
-            if name in cls._registry:
-                existing = cls._registry[name]
-                raise KeyError(f"Class name '{name}' is already registered to {existing}.")
-            # Register the class under the given name
-            cls._registry[name] = chosen_cls
-            return chosen_cls
+        # 1. Reset registry if this is a Base Class (like GitPlatform)
+        if IFactory in cls.__bases__:
+            cls._registry = {}
+            return
 
-        return decorator
+        # 2. Skip abstract helpers
+        if ABC in cls.__bases__:
+            return
 
-    @classmethod
-    def load_module(cls, name: str):
-        pass
+        # 3. Register the Child Class (Plugin)
+        # Key = filename (e.g., 'app.models.git_platforms.github' -> 'github')
+        key = cls.__module__.rsplit('.', 1)[-1]
 
-    @staticmethod
-    def _load_class_from_package_module(module_name: str, package_module: ModuleType, expected_base_class: Optional[Type[T]] = None) -> Type[T]:
+        # Optional: Check for duplicates
+        if key in cls._registry and cls._registry[key] != cls:
+            print(f"Warning: Overwriting registry key '{key}' with {cls.__name__}")
 
-        return load_class_from_package_module(module_name, package_module,expected_base_class)
-
-    @classmethod
-    @abstractmethod
-    def get_registry(cls) -> dict[str, type]:
-        """Return the registry mapping names to classes."""
-        return dict(cls._registry)
-
-    @classmethod
-    @abstractmethod
-    def get_registry_keys(cls):
-        """Return the registry mapping names to classes."""
-        return dict(cls._registry).keys()
+        cls._registry[key] = cls
 
     @classmethod
     def create(cls, *args, **kwargs):
         name = kwargs.get("name")
-        if not name:
-            raise ValueError(f"{cls.__name__}.create() requires a 'name' argument.")
-        try:
-            plugin_cls = cls._registry[name]
-        except KeyError:
-            cls.load_module(name)
 
-            plugin_cls = cls._registry.get(name)
+        # 1. Lazy Load Module if needed
+        if name not in cls._registry:
+            try:
+                cls.load_module(name)
+            except Exception as e:
+                print(f"[Factory] Warning: Could not load module '{name}': {e}")
 
-            if not plugin_cls:
-                raise ValueError(
-                    f"No class registered as '{name}'. "
-                    f"Ensure the module exists and the class is decorated with @{cls.__name__}.register()."
-                )
-        return plugin_cls(*args, **kwargs)
+        # 2. Get the specific class (e.g. GitHubSettings)
+        target_cls = cls._registry.get(name)
+        if not target_cls:
+            # Fallback or Error
+            available = list(cls._registry.keys())
+            raise ValueError(f"Class '{name}' not found in registry. Available: {available}")
+
+        # 3. Instantiate WITH 'name' explicitly passed back
+        # This fixes the "missing name property" issue
+        return target_cls(*args, **kwargs)
+
+    @classmethod
+    def load_module(cls, name: str):
+        """
+        Override this in the base class (e.g., GitPlatform) to define
+        where to look for plugins/subclasses.
+        """
+        pass
+
+    @classmethod
+    def get_registry_keys(cls) -> List[str]:
+        """
+        Returns a list of all currently registered keys.
+        Useful for debugging or creating dynamic choices in a UI/CLI.
+        """
+        return list(cls._registry.keys())
+
+    @staticmethod
+    def _load_class_from_package_module(module_name: str, package_module: ModuleType) -> None:
+        """
+        Internal helper to delegate to the utility function.
+        Keeps the interface clean if you want to call it from subclasses.
+        """
+        # Assuming you have the utility we wrote in app/utils/class_loader.py
+        from app.utils.class_loader import load_class_from_package_module
+        load_class_from_package_module(module_name, package_module)

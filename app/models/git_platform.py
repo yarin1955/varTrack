@@ -1,56 +1,71 @@
-from abc import ABC, abstractmethod
-from pathlib import Path
-from typing import Optional, TypeVar, List, Literal, Dict, Any
-from pydantic import BaseModel, ConfigDict, HttpUrl
-import git
-import asyncio
-from app.models.schema_registry import SchemaRegistry
+from abc import abstractmethod
+from typing import Literal, Optional, List
+from pydantic import BaseModel, ConfigDict, HttpUrl, Field
 
-T = TypeVar('T')
+# Import your Factory Interface
+from app.utils.interfaces.ifactory import IFactory
 
-class GitPlatform(BaseModel, ABC):
+class GitPlatform(BaseModel, IFactory):
     """
-    Shared settings: endpoint + either a token or username/password.
+    Base class for all Git Providers (GitHub, GitLab, etc.).
+    It combines Pydantic data validation with the IFactory registration system.
     """
+
+    # --- Identity ---
+    # 'name' is required by the Factory to find the class,
+    # and required by Pydantic to validate the instance.
     name: str
     endpoint: HttpUrl
-    token: Optional[str] = None
-    username: Optional[str] = None
-    password: Optional[str] = None
-    secret: Optional[str] = None
     protocol: Literal["ssh", "http", "https"]
-    events: Optional[List[str]] = ["push"]
 
-    model_config = ConfigDict(
-        extra="ignore",         # ignore unknown fields
-        validate_default=True,  # validate defaults
-    )
+    # --- Credentials ---
+    token: Optional[str] = Field(default=None)
+    username: Optional[str] = Field(default=None)
+    password: Optional[str] = Field(default=None)
+    secret: Optional[str] = Field(default=None)
+
+    # --- Enterprise / Network ---
+    verify_ssl: bool = Field(default=True)
+    timeout: int = Field(default=30)
+    max_retries: int = Field(default=3)
+
+    # Pydantic Config: Ignore extra fields (like comments in JSON)
+    model_config = ConfigDict(extra="ignore")
+
+    # =========================================================
+    # FACTORY IMPLEMENTATION
+    # =========================================================
+
+    @classmethod
+    def load_module(cls, name: str):
+        """
+        Implementation of the IFactory lazy-loader.
+        It tells the factory exactly where to look for plugins.
+        """
+        # 1. Import the package where your plugins live
+        #    We do this inside the function to avoid circular import issues
+        from app.models import git_platforms
+
+        # 2. Use the helper from IFactory to load the specific file (e.g., 'github.py')
+        cls._load_class_from_package_module(
+            module_name=name,
+            package_module=git_platforms  # Pass the module object
+        )
+
+    # =========================================================
+    # ABSTRACT METHODS (Contract for Subclasses)
+    # =========================================================
 
     @property
     @abstractmethod
-    def event_type_header(self):
+    def event_type_header(self) -> str:
+        """The HTTP header key used by the provider for event types (e.g. 'X-GitHub-Event')"""
         pass
 
     @property
     @abstractmethod
-    def git_scm_signature(self):
-        pass
-
-    @abstractmethod
-    def auth(self) -> T:
-        pass
-
-    @abstractmethod
-    def closed(self) -> T:
-        pass
-
-    @abstractmethod
-    def create_webhooks(self, repositories: List[str] | str, datasource: str=None):
-        pass
-
-    @abstractmethod
-    def resolve_repositories(self, patterns: List[str], exclude_patterns: Optional[List[str]] = None) -> List[str]:
-        """Convert wildcard patterns (e.g. 'org/*') into actual repo names."""
+    def git_scm_signature(self) -> str:
+        """The HTTP header key used for webhook signature verification"""
         pass
 
     @staticmethod
@@ -63,58 +78,7 @@ class GitPlatform(BaseModel, ABC):
     def is_pr_event(event_type):
         pass
 
-    @staticmethod
     @abstractmethod
-    def normalize_push_payload(payload: Dict[str, Any], file: Optional[str] = None):
-        pass
-
-    @abstractmethod
-    def generate_webhook_url(self, datasource: str= None) -> str:
-        if datasource:
-            return f"https://smee.io/wbkMDPCrORy5Hr/webhooks/{self.name}/{datasource}"
-        return f"https://smee.io/wbkMDPCrORy5Hr/webhooks/schemas"
-
-    async def git_clone(self, schema: SchemaRegistry):
-
-        folder_path = Path("./schemas")
-        folder_path.mkdir(exist_ok=True)
-        try:
-            clone_path= f"./schemas/{schema.repo}"
-
-            repo_url = self.git_url_generator(schema.repo)
-
-            git.Repo.clone_from(
-                repo_url,
-                clone_path,
-                branch=schema.branch,
-                depth=1  # Shallow clone for faster operation
-            )
-
-        except git.exc.GitCommandError as e:
-            print(f"Git error: {e}")
-        except Exception as e:
-            print(f"Error: {e}")
-
-        return self
-
-    def git_url_generator(self, repo: str) -> str:
-        clean_endpoint = str(self.endpoint).split('//', 1)[1]
-        print(f"{self.protocol}://{clean_endpoint}{self.username}/{repo}.git")
-        return f"{self.protocol}://{clean_endpoint}{self.username}/{repo}.git"
-
-    def setup_webhooks(self, schema: SchemaRegistry, repos: List[str], datasource, exclude_repos: List[str] = None):
-        builder: GitPlatform = self.auth()
-        if schema.platform == self.name:
-            asyncio.run(builder.git_clone(schema))
-            builder = builder.create_webhooks(schema.repo)
-        if repos:
-            print(f"Creating webhooks for {len(repos)} repositories: {repos}")
-            builder = builder.create_webhooks(repos, datasource)
-        else:
-            print("No repositories found for webhook creation")
-
-        return builder.closed()
-
-    @abstractmethod
-    def get_file_from_commit(self, repo_name: str, commit_hash: str, file_path: str) -> Optional[str]:
+    def construct_clone_url(self, repo: str) -> str:
+        """Generates the git clone URL (HTTPS or SSH) based on settings."""
         pass

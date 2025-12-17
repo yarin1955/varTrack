@@ -6,7 +6,7 @@ from typing import Dict, Any, List, Optional
 from flask import jsonify
 
 from app.models.git_platform import GitPlatform
-from app.models.role import Role
+from app.models.rule import Rule
 from app.utils.file_change import ChangeFile
 from app.utils.normalized_push import NormalizedPush
 
@@ -14,7 +14,7 @@ from app.utils.normalized_push import NormalizedPush
 class WebhooksHandler:
 
     @staticmethod
-    def handle_webhook(platform: GitPlatform, raw_payload, json_payload, headers, role: Role):
+    def handle_webhook(platform: GitPlatform, raw_payload, json_payload, headers, role: Rule):
 
         event_type_header = platform.event_type_header
 
@@ -109,7 +109,7 @@ class WebhooksHandler:
         return results
 
     @staticmethod
-    def _match_file_to_role(file_path: str, ref: str, role: Role) -> Optional[Dict[str, Any]]:
+    def _match_file_to_role(file_path: str, ref: str, role: Rule) -> Optional[Dict[str, Any]]:
         """
         Check if a file matches the Role's file strategy (fileName or filePathMap)
         and derive environment variables.
