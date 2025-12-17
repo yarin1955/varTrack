@@ -57,14 +57,6 @@ class ISource(IFactory):
         base_dir = Path("./schemas")
         target_dir = base_dir / schema.repo
 
-        # Windows-safe cleanup using system command
-        if target_dir.exists():
-            print(f"[System] Cleaning up existing directory: {target_dir}")
-            exit_code = os.system(f'rmdir /S /Q "{target_dir}"')
-            if exit_code != 0:
-                print(f"[Error] Failed to delete {target_dir}. Check permissions.")
-                # We continue anyway, git clone might fail or might work if empty
-
         try:
             repo_url = self.settings.construct_clone_url(schema.repo)
 
