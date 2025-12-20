@@ -1,20 +1,19 @@
 import json
 from typing import Union, Any, Dict
 
-
 def compare_states(
         current_data: Union[str, Any],
         old_data: Union[str, Any],
 ) -> Dict[str, Dict[str, Any]]:
     """
-    Compare two data structures and return deleted, added, and changed items.
+    Compare two data structures and return deleted, added, changed, and unchanged items.
 
     Args:
         current_data: The current/new data structure (can be JSON string or dict/list)
         old_data: The old/previous data structure (can be JSON string or dict/list)
 
     Returns:
-        Dictionary with 'deleted', 'added', and 'changed' keys containing the differences
+        Dictionary with 'deleted', 'added', 'changed', and 'unchanged' keys.
     """
     # Parse JSON strings if needed
     if isinstance(current_data, str):
@@ -32,6 +31,7 @@ def compare_states(
     deleted = {}
     added = {}
     changed = {}
+    unchanged = {}
 
     # Handle non-dict cases
     if not isinstance(current_data, dict):
@@ -44,74 +44,20 @@ def compare_states(
         if key not in current_data:
             deleted[key] = old_data[key]
 
-    # Find added keys (in current but not in old)
+    # Find added, changed, and unchanged keys
     for key in current_data:
         if key not in old_data:
             added[key] = current_data[key]
-
-    # Find changed keys (in both but with different values)
-    for key in current_data:
-        if key in old_data and current_data[key] != old_data[key]:
-            changed[key] = {
-                'old': old_data[key],
-                'new': current_data[key]
-            }
+        elif current_data[key] != old_data[key]:
+            # Changed: store only the new value, not {'old': ..., 'new': ...}
+            changed[key] = current_data[key]
+        else:
+            # Unchanged: value is the same in both
+            unchanged[key] = current_data[key]
 
     return {
         'deleted': deleted,
         'added': added,
-        'changed': changed
+        'changed': changed,
+        'unchanged': unchanged
     }
-# def compare_json_strings(json_str1, json_str2, separator='/'):
-#     """
-#     Compare two JSON strings and return what was deleted, added, and changed.
-#     Uses flattened path notation for structured comparison.
-#
-#     Args:
-#         json_str1: First JSON string (original)
-#         json_str2: Second JSON string (new/modified)
-#         separator: String to separate nested keys (default: '/')
-#
-#     Returns:
-#         dict: Dictionary with 'deleted', 'added', and 'changed' keys containing the differences
-#     """
-#     try:
-#         data1 = json.loads(json_str1) if json_str1 else {}
-#         data2 = json.loads(json_str2) if json_str2 else {}
-#     except json.JSONDecodeError as e:
-#         raise ValueError(f"Invalid JSON string: {e}")
-#
-#     # Flatten both JSON structures
-#     # flat1 = flatten_json(data1, separator)
-#     # flat2 = flatten_json(data2, separator)
-#
-#     # Get all unique keys from both flattened dictionaries
-#     keys1 = set(flat1.keys())
-#     keys2 = set(flat2.keys())
-#
-#     # Find differences
-#     deleted = {}
-#     added = {}
-#     changed = {}
-#
-#     # Keys that exist in original but not in new (deleted)
-#     for key in keys1 - keys2:
-#         deleted[key] = flat1[key]
-#
-#     # Keys that exist in new but not in original (added)
-#     for key in keys2 - keys1:
-#         added[key] = flat2[key]
-#
-#     # Keys that exist in both but have different values (changed)
-#     for key in keys1 & keys2:
-#         if flat1[key] != flat2[key]:
-#             changed[key] = {
-#                 'old': flat1[key],
-#                 'new': flat2[key]
-#             }
-#
-#     return {
-#         'deleted': deleted,
-#         'added': added,
-#         'changed': changed
-#     }
