@@ -16,9 +16,9 @@ def create_app(config_data: dict | None = None) -> Flask:
     for datasource in config_data.get("datasources", []):
         app.config[datasource["name"]] = datasource
 
-    for role in config_data.get("roles", []):
-        key = f"{role['platform']}::{role['datasource']}"
-        app.config[key] = role
+    for rule in config_data.get("rules", []):
+        key = f"{rule['platform']}::{rule['datasource']}"
+        app.config[key] = rule
 
     # Celery config from JSON (if present)
     if "celery" in config_data:
