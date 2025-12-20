@@ -1,25 +1,15 @@
-# Standard Imports
 from abc import abstractmethod
 from typing import Dict, List, Optional, Any
 from pathlib import Path
-import os
 import git
-
-# Gevent Imports (Must be patched early)
-import gevent
-from gevent import monkey
-
-monkey.patch_all()  # Patches socket/ssl/threading to be async-compatible
-
-# App Imports
 from app.models.git_platform import GitPlatform
 from app.models.schema_registry import SchemaRegistry
 from app.utils.interfaces.ifactory import IFactory
 from app.utils.normalized_pr import NormalizedPR
 from app.utils.normalized_push import NormalizedPush
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
-
-class ISource(IFactory):
+class Source(IFactory):
 
     @classmethod
     def load_module(cls, name: str):
@@ -29,6 +19,14 @@ class ISource(IFactory):
             module_name=name,
             package_module=sources
         )
+
+    @abstractmethod
+    def fetch(self) -> List[Any]:
+        """
+        Reads data from the external system (Git).
+        Returns a list of raw items (e.g., tuples of content) to be processed.
+        """
+        pass
 
     @classmethod
     def create(cls, *args, **kwargs):
@@ -79,33 +77,40 @@ class ISource(IFactory):
     def setup_webhooks(self, schema: SchemaRegistry, repos: List[str], datasource: str,
                        exclude_repos: List[str] = None):
         """
-        Orchestrator: Authenticates, clones schema, and applies webhooks IN PARALLEL.
+        Orchestrator: Authenticates, clones schema, and applies webhooks.
+        Uses Standard Python Threads (Fixed Pool).
         """
         try:
-            # 1. Authenticate (Main Thread - Shared Session)
+            # 1. Authenticate
             self.auth()
 
-            # 2. Handle Schema Registry Repo (Sequential - Critical Step)
+            # 2. Handle Schema Registry Repo
             if schema.platform == self.settings.name:
                 print(f"[{self.settings.name}] Managing Schema Repo: {schema.repo}")
                 self.clone_schema_repo(schema)
                 self.create_webhooks(schema.repo, datasource=None)
 
-            # 3. Handle Target Repositories (Parallel - High Performance)
+            # 3. Handle Target Repositories
             if repos:
                 final_repos = [r for r in repos if r not in (exclude_repos or [])]
                 count = len(final_repos)
-                print(f"[{self.settings.name}] Configuring webhooks for {count} repositories (Async)...")
+                print(f"[{self.settings.name}] Configuring webhooks for {count} repositories (Threaded)...")
 
-                # Spawn a Greenlet for each repository
-                # This runs create_webhooks concurrently for every repo
-                jobs = [
-                    gevent.spawn(self.create_webhooks, repo, datasource)
-                    for repo in final_repos
-                ]
+                # REPLACEMENT: Fixed pool of 10 threads
+                with ThreadPoolExecutor(max_workers=10) as executor:
+                    # Submit all tasks
+                    future_to_repo = {
+                        executor.submit(self.create_webhooks, repo, datasource): repo
+                        for repo in final_repos
+                    }
 
-                # Wait for all jobs to finish
-                gevent.joinall(jobs)
+                    # Wait for completion and handle errors
+                    for future in as_completed(future_to_repo):
+                        repo = future_to_repo[future]
+                        try:
+                            future.result()  # This re-raises any exception caught during execution
+                        except Exception as exc:
+                            print(f"[{self.settings.name}] Repo {repo} generated an exception: {exc}")
 
             else:
                 print(f"[{self.settings.name}] No target repositories provided.")
