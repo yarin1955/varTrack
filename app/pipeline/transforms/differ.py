@@ -34,14 +34,6 @@ class DiffExploder(Transform):
                 metadata=metadata
             ))
 
-        for key, value in diff['unchanged'].items():
-            rows.append(PipelineRow(
-                key=key,
-                value=value,
-                kind=RowKind.UPDATE,
-                metadata=metadata
-            ))
-
         # 3. RowKind.DELETE
         for key, value in diff['deleted'].items():
             rows.append(PipelineRow(
