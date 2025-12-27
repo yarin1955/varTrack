@@ -1,6 +1,7 @@
 import json
 import dataclasses
 from datetime import datetime
+from enum import Enum  # <--- Import Enum
 from celery import Celery
 from kombu.serialization import register
 from pydantic import BaseModel
@@ -8,6 +9,10 @@ from pydantic import BaseModel
 
 class TaskJSONEncoder(json.JSONEncoder):
     def default(self, obj):
+        if isinstance(obj, set):
+            return list(obj)
+        if isinstance(obj, Enum):    # <--- Add this block
+            return obj.value         # Returns the string value (e.g. "added")
         if isinstance(obj, BaseModel):
             return obj.model_dump()
         if dataclasses.is_dataclass(obj):
@@ -60,13 +65,13 @@ def init_celery(app):
             'main': {
                 'worker_max_tasks_per_child': 1000,  # Recycle occasionally to be safe
                 'worker_concurrency': 10,
-                'worker_pool': 'gevent',
+                'worker_pool': 'threads',
                 'worker_queues': ['main_agent'],
             },
             'worker': {
                 'worker_max_tasks_per_child': 100,
                 'worker_concurrency': 20,
-                'worker_pool': 'gevent',
+                'worker_pool': 'threads',
                 'worker_queues': ['worker_agents']
             }
         }
