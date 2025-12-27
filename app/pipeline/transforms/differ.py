@@ -1,6 +1,6 @@
 from typing import List, Dict, Any
 from app.pipeline.transform import Transform
-from app.pipeline.models import PipelineRow, RowKind
+from app.pipeline.pipeline_row import PipelineRow, RowKind
 from app.business_logic.compare_states import compare_states
 
 
@@ -29,7 +29,7 @@ class DiffExploder(Transform):
         for key, change in diff['changed'].items():
             rows.append(PipelineRow(
                 key=key,
-                value=change['new'],
+                value=change,
                 kind=RowKind.UPDATE,
                 metadata=metadata
             ))
