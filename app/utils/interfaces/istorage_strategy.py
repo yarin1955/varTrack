@@ -1,31 +1,15 @@
-from abc import ABC, abstractmethod
+from abc import abstractmethod, ABC
 from typing import Any
 
 
 class IStorageStrategy(ABC):
     """Abstract base class for update strategies"""
 
+    @staticmethod
     @abstractmethod
-    def insert(self, *args: Any, **kwargs: Any) -> None:
-        """Insert data into storage."""
-        pass
-
-    @abstractmethod
-    def upsert(self, *args: Any, **kwargs: Any) -> None:
-        """Insert data into storage."""
-        pass
-
-    @abstractmethod
-    def get(self, *args: Any, **kwargs: Any) -> Any:
-        """Retrieve data from storage."""
-        pass
-
-    @abstractmethod
-    def update(self, *args: Any, **kwargs: Any) -> None:
-        """Update data in storage."""
-        pass
-
-    @abstractmethod
-    def delete(self, *args: Any, **kwargs: Any) -> None:
-        """Delete data from storage."""
+    def write(*args: Any, **kwargs: Any) -> None:
+        """
+        Insert data into storage.
+        Accepts generic arguments to allow flexibility in implementation.
+        """
         pass
