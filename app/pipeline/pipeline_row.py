@@ -9,6 +9,7 @@ class RowKind(Enum):
     INSERT = auto()  # New configuration key added
     UPDATE = auto()  # Existing key's value changed
     DELETE = auto()  # Key removed
+    UNCHANGED = auto()
 
 @dataclass
 class PipelineRow:

@@ -96,6 +96,12 @@ class MongoConfig(DataSource):
     # Replica Set configuration
     replica_set: Optional[str] = Field(default=None, description="Replica set name")
 
+    buffer_size: int = Field(
+        default=1000,
+        ge=1,
+        description="Number of operations to buffer in memory before performing a bulk write"
+    )
+
     # Connection pool settings
     max_pool_size: int = Field(default=100, ge=1, description="Maximum connection pool size")
     min_pool_size: int = Field(default=0, ge=0, description="Minimum connection pool size")

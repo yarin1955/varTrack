@@ -1,7 +1,7 @@
 from abc import abstractmethod
 
 from app.models.datasource import DataSource
-from app.pipeline.models import PipelineRow
+from app.pipeline.pipeline_row import PipelineRow
 from app.utils.interfaces.ifactory import IFactory
 
 

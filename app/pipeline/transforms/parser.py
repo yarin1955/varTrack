@@ -1,5 +1,5 @@
 from typing import Dict, Any, Optional
-from app.pipeline.core import Transform
+from app.pipeline.transform import Transform
 from app.utils.handlers.file_formats import FileFormatsHandler
 
 class ContentParser(Transform):

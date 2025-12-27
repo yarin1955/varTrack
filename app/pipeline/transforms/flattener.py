@@ -1,5 +1,5 @@
 from typing import Dict, Any
-from app.pipeline.core import Transform
+from app.pipeline.transform import Transform
 from app.business_logic.json_pathmap import flatten_dfs, find_key_iterative
 
 

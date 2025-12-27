@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from typing import List, Any
-from app.pipeline.models import PipelineRow
+from app.pipeline.pipeline_row import PipelineRow
 
 class Transform(ABC):
     @abstractmethod
