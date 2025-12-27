@@ -7,6 +7,7 @@ from dataclasses import asdict
 
 from ..models.git_platform import GitPlatform
 from ..models.rule import Rule
+from ..pipeline.source import Source
 
 
 @celery_app.task(name='app.webhook_handler', bind=True, queue='main_agent')
@@ -17,7 +18,7 @@ def webhook_handler(self, platform, datasource, raw_payload, json_payload, heade
         if not platform_config:
             raise ValueError(f"Configuration for platform '{platform}' not found.")
 
-        platform_instance = GitPlatform.create(**platform_config)
+        platform_instance = Source.create(**platform_config)
     except Exception as e:
         print(f"❌ Error initializing platform: {e}")
         return {'status': 'error', 'message': str(e)}
@@ -30,7 +31,7 @@ def webhook_handler(self, platform, datasource, raw_payload, json_payload, heade
     # Handle Webhook
     try:
         # Instantiate temporary rule object for validation inside handle_webhook
-        actionable_items = WebhooksHandler.handle_webhook(platform=platform_instance, raw_payload=raw_payload,
+        actionable_items = WebhooksHandler.handle_webhook(source=platform_instance, raw_payload=raw_payload,
             json_payload=json_payload,  # Pass parsed JSON if your handler uses it
             headers=headers,
             rule=rule_config
