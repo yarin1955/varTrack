@@ -1,18 +1,19 @@
 import base64
 import fnmatch
 from datetime import datetime
-from typing import Optional, Dict, List, Any
+from typing import Optional, Dict, List, Any, Set
 
 from github import Github, GithubException, Auth
 
 from app.models.git_platforms.github import GitHubSettings
-from app.utils.interfaces.isource import ISource
-from app.utils.normalized_commit import NormalizedCommit
+from app.pipeline.source import Source
+from app.utils.enums.file_status import FileStatus
+from app.utils.normalized_commit import NormalizedCommit, FileChange
 from app.utils.normalized_pr import NormalizedPR
 from app.utils.normalized_push import NormalizedPush
 
 
-class GitHubSource(ISource):
+class GitHubSource(Source):
     """
     Operational Logic for GitHub.
     Handles authentication, API interactions, and payload normalization.
@@ -52,6 +53,39 @@ class GitHubSource(ISource):
 
         return self
 
+    def read(self, files: List[Dict[str, Any]], repository: str) -> List[Dict[str, Any]]:
+        """
+        Sequential fetch of file content.
+        """
+        self._ensure_connected()
+        results = []
+
+        print(f"🚀 [GitHubSource] Fetching {len(files)} file versions sequentially...")
+
+        for item in files:
+            path = item['file_path']
+            curr_sha = item.get('last_commit_hash')
+            prev_sha = item.get('first_commit_hash')
+
+            # 1. Fetch Current Content (if SHA exists)
+            current_content = None
+            if curr_sha:
+                current_content = self.get_file_from_commit(repository, curr_sha, path)
+
+            # 2. Fetch Previous Content (if SHA exists)
+            previous_content = None
+            if prev_sha:
+                previous_content = self.get_file_from_commit(repository, prev_sha, path)
+
+            results.append({
+                "current": current_content,
+                "previous": previous_content,
+                "metadata": item.get('match_context'),
+                "file_path": path
+            })
+
+        return results
+
     def closed(self) -> "GitHubSource":
         """Closes the active connection."""
         if self.client:
@@ -63,6 +97,9 @@ class GitHubSource(ISource):
         """Helper to ensure we have an active client."""
         if not self.client:
             self.auth()
+
+    def fetch(self):
+        pass
 
     # --- Repository Management ---
 
@@ -235,11 +272,18 @@ class GitHubSource(ISource):
         ts_raw = pr_data.get("updated_at") or pr_data.get("created_at")
         ts = datetime.fromisoformat(ts_raw.replace("Z", "+00:00")) if ts_raw else None
 
+        # Convert raw lists to Set[FileChange]
+        file_changes: Set[FileChange] = set()
+        for f in added:
+            file_changes.add(FileChange(path=f, status=FileStatus.ADDED))
+        for f in modified:
+            file_changes.add(FileChange(path=f, status=FileStatus.MODIFIED))
+        for f in removed:
+            file_changes.add(FileChange(path=f, status=FileStatus.REMOVED))
+
         commit = NormalizedCommit(
             hash=head_sha,
-            added=added,
-            modified=modified,
-            removed=removed,
+            files=file_changes,
             timestamp=ts
         )
 
@@ -269,11 +313,23 @@ class GitHubSource(ISource):
             ts_raw = c.get("timestamp")
             ts = datetime.fromisoformat(ts_raw.replace("Z", "+00:00")) if ts_raw else None
 
+            # Extract raw lists
+            added_files = c.get("added", []) or []
+            modified_files = c.get("modified", []) or []
+            removed_files = c.get("removed", []) or []
+
+            # Convert to Set[FileChange]
+            file_changes: Set[FileChange] = set()
+            for f in added_files:
+                file_changes.add(FileChange(path=f, status=FileStatus.ADDED))
+            for f in modified_files:
+                file_changes.add(FileChange(path=f, status=FileStatus.MODIFIED))
+            for f in removed_files:
+                file_changes.add(FileChange(path=f, status=FileStatus.REMOVED))
+
             nc = NormalizedCommit(
                 hash=c.get("id", ""),
-                added=c.get("added", []) or [],
-                modified=c.get("modified", []) or [],
-                removed=c.get("removed", []) or [],
+                files=file_changes,
                 timestamp=ts
             )
 
