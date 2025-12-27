@@ -3,8 +3,7 @@ from collections import defaultdict
 from pydantic import TypeAdapter
 from app.models.bundle import Bundle
 from app.models.git_platform import GitPlatform
-from app.pipeline.core import Source
-from app.utils.interfaces.isource import ISource
+from app.pipeline.source import Source
 
 
 def initializer(data: Bundle):
@@ -26,7 +25,7 @@ def initializer(data: Bundle):
         if not platform_rules:
             continue
 
-        platform_instance = ISource.create(**platform_conf.model_dump())
+        platform_instance = Source.create(**platform_conf.model_dump())
         for rule in platform_rules:
             if not rule.repositories:
                 continue

@@ -4,7 +4,6 @@ from ..models.datasource import DataSource
 from ..models.git_platform import GitPlatform
 from ..utils.handlers.webhooks import WebhooksHandler
 from app.tasks.main_agent import webhook_handler
-from ..utils.interfaces.isource import ISource
 
 bp = Blueprint('webhooks', __name__)
 
