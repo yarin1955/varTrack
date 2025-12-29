@@ -45,13 +45,15 @@ class MongoDocumentStrategy(IStorageStrategy):
 
         try:
             # Scenario A: Static Collection (Simple)
-            if collection:
+            # FIX: Explicit check against None
+            if collection is not None:
                 operations = create_ops(buffer)
                 if operations:
                     collection.bulk_write(operations, ordered=False)
 
             # Scenario B: Dynamic Collection (Group by 'env')
-            elif db:
+            # FIX: Explicit check against None
+            elif db is not None:
                 grouped = defaultdict(list)
                 for r in buffer:
                     target = r.metadata.get('env') or r.metadata.get('collection')

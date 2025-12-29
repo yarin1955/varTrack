@@ -162,7 +162,7 @@ class Rule(BaseModel):
 
         return DynamicStrategySelector.decide(content=current_str,sink=sink)
 
-    def get_unique_key_and_env(self, file_path: str, branch: str) -> Optional[RuleMatch]:
+    def get_unique_key_and_env(self, file_path: str, branch: str) -> Optional[Dict[str, str]]:
         """
         Resolves the unique key and the environment variable.
         Priority:
@@ -189,9 +189,9 @@ class Rule(BaseModel):
         if env:
             variables["env"] = env
             key = self._format_unique_key(variables)
-            return key, env
+            return {"unique_key": key, "env": env}
 
-        return None, None
+        return None
 
     def get_unique_key(self, file_path: str, branch: str, repo_name: str) -> Optional[str]:
 

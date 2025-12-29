@@ -1,5 +1,6 @@
 from pymongo import InsertOne, UpdateOne, DeleteOne
 from pymongo.collection import Collection
+from pymongo.database import Database
 from pymongo.errors import BulkWriteError
 
 from app.models.datasources.mongo import MongoConfig
@@ -17,6 +18,9 @@ class MongoSink(Sink):
         self._strategy = self._select_strategy()
         self._client = None
         self._buffer = []
+        # Initialize placeholders for the actual PyMongo objects
+        self._db: Database = None
+        self._collection: Collection = None
 
     def _select_strategy(self) -> IStorageStrategy:
         if self._config.update_strategy == StrategyEnum.FILE:
@@ -35,7 +39,6 @@ class MongoSink(Sink):
             self._client = MongoClient(**options)
 
             # 3. Verify connectivity immediately (fail fast)
-            # 'ping' command is lightweight and verifies Auth + Network
             self._client.admin.command('ping')
             print(f"✅ [MongoSink] Successfully connected to MongoDB at {self._config.host}:{self._config.port}")
 
@@ -48,18 +51,15 @@ class MongoSink(Sink):
                     col_name = self._config.collection
 
                     # Check if we need to apply specific creation options
-                    # (e.g., TimeSeries, Capped, Validators)
                     col_options = self._config.get_collection_options()
 
                     if col_options:
-                        # We must check existence, otherwise create_collection raises an error if it exists
                         existing_cols = self._db.list_collection_names()
-
                         if col_name not in existing_cols:
                             print(f"⚙️ [MongoSink] Creating collection '{col_name}' with specific options.")
                             self._db.create_collection(col_name, **col_options)
 
-                    # Set the collection reference for the flush method
+                    # Set the collection reference
                     self._collection = self._db[col_name]
 
             elif not self._config.envAsCollection:
@@ -75,13 +75,13 @@ class MongoSink(Sink):
     def write(self, row: PipelineRow) -> None:
         """
         Delegate the entire write logic to the strategy.
-        The strategy will handle buffering and flushing.
         """
+        # FIX 1: Pass the actual PyMongo objects (self._db, self._collection), not the config strings
         self._strategy.write(
             row=row,
             buffer=self._buffer,
-            db=self._config.database,
-            collection=self._config.collection,
+            db=self._db,
+            collection=self._collection,
             buffer_size=self._config.buffer_size
         )
 
@@ -90,12 +90,12 @@ class MongoSink(Sink):
         Force flush any remaining items in the buffer.
         """
         if self._buffer:
-            # We call the strategy with buffer_size=0 to force a flush
+            # FIX 2: Pass buffer_size=0 to force the strategy to flush immediately
+            # FIX 3: Pass actual PyMongo objects here as well
             self._strategy.write(
-                row=None,  # No new row, just flush existing
+                row=None,
                 buffer=self._buffer,
-                db=self._config.database,
-                collection=self._config.collection,
-                buffer_size=self._config.buffer_size
+                db=self._db,
+                collection=self._collection,
+                buffer_size=0  # Force flush
             )
-

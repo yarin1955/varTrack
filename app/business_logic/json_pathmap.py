@@ -77,12 +77,9 @@ def flatten_dfs(
 
     return result
 
-
 def find_key_iterative(obj, target_key):
     """Non-recursive search for a key in nested JSON"""
     results = []
-
-    # Queue stores tuples of (current_object, path)
     queue = deque([(obj, "")])
 
     while queue:
@@ -92,23 +89,20 @@ def find_key_iterative(obj, target_key):
             for key, value in current_obj.items():
                 path = f"{current_path}.{key}" if current_path else key
 
-                # Found the target key
                 if key == target_key:
                     results.append({
                         "path": path,
                         "value": value
                     })
 
-                # Add nested structures to queue
                 if isinstance(value, (dict, list)):
                     queue.append((value, path))
 
         elif isinstance(current_obj, list):
             for i, item in enumerate(current_obj):
                 path = f"{current_path}[{i}]"
-
-                # Add nested structures to queue
                 if isinstance(item, (dict, list)):
                     queue.append((item, path))
 
-    return results[0]
+    # FIX: Safety check to return None if key not found
+    return results[0] if results else None
