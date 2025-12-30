@@ -31,7 +31,7 @@ class Rule(BaseModel):
     filePathMap: Optional[Dict[str, str]] = None
     uniqueKeyName: str = "{repoName}-{env}"
     variablesMap: Optional[Dict[str, str]] = None
-    syncMode: SyncMode = SyncMode.GIT_SMART_REPAIR
+    syncMode: SyncMode = SyncMode.LIVE_STATE
 
     overrides: Optional[List[RepositoryOverride]] = None
     #prune: bool = False
@@ -156,11 +156,16 @@ class Rule(BaseModel):
 
             return Rule(**final_config)
 
-    def resolve_sync_mode(self, sink, current_str):
+    def resolve_sync_mode(self, sink, current_str, is_file_strategy: bool):
         if self.syncMode != SyncMode.AUTO:
             return self.syncMode
 
-        return DynamicStrategySelector.decide(content=current_str,sink=sink)
+        # AUTO uses DynamicStrategySelector to choose the best mode
+        return DynamicStrategySelector.decide(
+            content=current_str,
+            sink=sink,
+            is_file_strategy=is_file_strategy
+        )
 
     def get_unique_key_and_env(self, file_path: str, branch: str) -> Optional[Dict[str, str]]:
         """

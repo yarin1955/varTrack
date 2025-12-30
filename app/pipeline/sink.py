@@ -1,4 +1,5 @@
 from abc import abstractmethod
+from typing import Any
 
 from app.models.datasource import DataSource
 from app.pipeline.pipeline_row import PipelineRow
@@ -41,5 +42,12 @@ class Sink(IFactory):
     def flush(self) -> None:
         """
         Forces the buffer to be written to the destination system.
+        """
+        pass
+
+    @abstractmethod
+    def read(self, metadata: dict) -> Any:
+        """
+        Reads the current state from the destination system for comparison.
         """
         pass
