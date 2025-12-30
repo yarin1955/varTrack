@@ -1,6 +1,7 @@
 from datetime import datetime
 from typing import Dict, Any
 
+from app.business_logic.lifecycle import get_file_lifecycle
 from app.celery_app import celery as celery_app
 
 # Models & Utils
@@ -12,7 +13,7 @@ from app.utils.normalized_push import NormalizedPush
 from app.utils.normalized_commit import NormalizedCommit, FileChange
 from app.utils.enums.file_status import FileStatus
 from app.utils.enums.sync_mode import SyncMode
-
+from app.business_logic.sync_engine import calculate_sync_rows
 # Pipeline Components
 from app.pipeline.transforms.parser import ContentParser
 from app.pipeline.transforms.flattener import Flattenizer
@@ -71,31 +72,7 @@ def data_manager(self, platform_config: dict, datasource_config: dict, normalize
         commit_sha = git_event.after
         branch = git_event.branch
 
-    # 2. Track lifecycle of changed files
-    git_event.sort_commits(reverse=True)
-    file_lifecycle = {}
-    ignored_files = set()
-
-    for commit in git_event.commits:
-        for file_change in commit.files:
-            path = file_change.path
-            if path in ignored_files:
-                continue
-
-            if path in file_lifecycle:
-                file_lifecycle[path]['earliest_status'] = file_change.status
-                continue
-
-            match_context = rule.get_unique_key_and_env(file_path=path, branch=branch)
-            if not match_context:
-                ignored_files.add(path)
-                continue
-
-            file_lifecycle[path] = {
-                'latest_status': file_change.status,
-                'earliest_status': file_change.status,
-                'match_context': match_context
-            }
+    file_lifecycle = get_file_lifecycle(git_event=git_event, rule=rule, branch=branch)
 
     files_to_process = []
     for file_path, lifecycle in file_lifecycle.items():
@@ -125,64 +102,24 @@ def data_manager(self, platform_config: dict, datasource_config: dict, normalize
     parser = ContentParser()
     flattener = Flattenizer(root_key="varTrack")
 
-    files_with_content = source.read(files_to_process, git_event.repository)
+    files_to_process = source.read(files_to_process, git_event.repository)
 
     processed_files = 0
     total_rows_written = 0
 
     # 4. Process Synchronization per File
-    for file in files_with_content:
+    for file in files_to_process:
         try:
             # A. Resolve Sync Mode (passing is_file_strategy for AUTO decisions)
             is_file_strategy = (datasource_config.get('update_strategy') == 'file')
-            sync_mode = rule.resolve_sync_mode(sink, file['current'], is_file_strategy)
-
-            # B. Parse & Flatten Current Git State
-            curr_flat = flattener.process(parser.process(file['current']))
-
-            # C. Determine "Previous" State for comparison based on SyncMode
-            if sync_mode == SyncMode.LIVE_STATE:
-                # Comparison: Git File vs actual Database Document
-                # sink.read() handles stripping internal _id and metadata to avoid fake flushes
-                db_raw = sink.read(file['metadata'])
-                if is_file_strategy:
-                    # For file strategy, parse the raw DB string before flattening
-                    prev_flat = flattener.process(parser.process(db_raw))
-                else:
-                    # For doc strategy, Sink.read already returns a dict
-                    prev_flat = db_raw or {}
-            else:
-                # Standard Mode: Compare Current Git against Previous Commit
-                prev_flat = flattener.process(parser.process(file['previous']))
-
-            # D. Generate Diff
-            diff = compare_states(current_data=curr_flat, old_data=prev_flat)
-            rows = []
-
-            # Map Standard changes (Added, Changed, Deleted) to PipelineRows
-            for kind, entries in [
-                (RowKind.INSERT, diff['added']),
-                (RowKind.UPDATE, diff['changed']),
-                (RowKind.DELETE, diff['deleted'])
-            ]:
-                for k, v in entries.items():
-                    rows.append(PipelineRow(key=k, value=v, kind=kind, metadata=file['metadata']))
-
-            # E. Handle "Unchanged" data according to specific SyncModes
-            if sync_mode == SyncMode.GIT_UPSERT_ALL:
-                # Force update all unchanged keys to ensure metadata is created/refreshed in DB
-                for k, v in diff['unchanged'].items():
-                    rows.append(PipelineRow(key=k, value=v, kind=RowKind.UPDATE, metadata=file['metadata']))
-
-            elif sync_mode == SyncMode.GIT_SMART_REPAIR:
-                # Query DB to check if unchanged Git data actually exists or matches
-                db_raw = sink.read(file['metadata'])
-                db_state = flattener.process(parser.process(db_raw)) if is_file_strategy else (db_raw or {})
-
-                for k, v in diff['unchanged'].items():
-                    # Update if key is missing from DB or values have drifted
-                    if k not in db_state or db_state[k] != v:
-                        rows.append(PipelineRow(key=k, value=v, kind=RowKind.UPDATE, metadata=file['metadata']))
+            rows = calculate_sync_rows(
+                file=file,
+                rule=rule,
+                sink=sink,
+                parser=parser,
+                flattener=flattener,
+                is_file_strategy=is_file_strategy
+            )
 
             # F. Write Rows to Sink Buffer
             for row in rows:
@@ -201,5 +138,4 @@ def data_manager(self, platform_config: dict, datasource_config: dict, normalize
         'status': 'success',
         'processed_files': processed_files,
         'total_rows': total_rows_written,
-        'sync_mode_sample': sync_mode.value if 'sync_mode' in locals() else "N/A"
     }

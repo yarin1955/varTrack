@@ -31,7 +31,7 @@ class Rule(BaseModel):
     filePathMap: Optional[Dict[str, str]] = None
     uniqueKeyName: str = "{repoName}-{env}"
     variablesMap: Optional[Dict[str, str]] = None
-    syncMode: SyncMode = SyncMode.LIVE_STATE
+    syncMode: SyncMode = SyncMode.AUTO
 
     overrides: Optional[List[RepositoryOverride]] = None
     #prune: bool = False
