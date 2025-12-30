@@ -32,21 +32,35 @@ class Sink(IFactory):
         return target_cls(ds_instance)
 
     @abstractmethod
-    def write(self, row: PipelineRow) -> None:
+    def write(self, *args, **kwargs) -> None:
         """
         Accepts a single row and adds it to the internal buffer.
         """
         pass
 
     @abstractmethod
-    def flush(self) -> None:
+    def flush(self, *args, **kwargs) -> None:
         """
         Forces the buffer to be written to the destination system.
         """
         pass
 
     @abstractmethod
-    def read(self, metadata: dict) -> Any:
+    def fetch(self, *args, **kwargs) -> Any:
+        """
+        Reads the current state from the destination system for comparison.
+        """
+        pass
+
+    @abstractmethod
+    def connect(self, *args, **kwargs) -> Any:
+        """
+        Reads the current state from the destination system for comparison.
+        """
+        pass
+
+    @abstractmethod
+    def disconnect(self, *args, **kwargs) -> Any:
         """
         Reads the current state from the destination system for comparison.
         """

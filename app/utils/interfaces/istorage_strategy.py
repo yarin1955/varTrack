@@ -13,3 +13,9 @@ class IStorageStrategy(ABC):
         Accepts generic arguments to allow flexibility in implementation.
         """
         pass
+
+    @staticmethod
+    @abstractmethod
+    def fetch(*args: Any, **kwargs: Any) -> None:
+
+        pass

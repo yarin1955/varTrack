@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import List, Optional, Any
 from collections import defaultdict
 from pymongo import UpdateOne
 from pymongo.collection import Collection
@@ -55,3 +55,24 @@ class MongoDocumentStrategy(IStorageStrategy):
             print(f"❌ [MongoDocStrategy] Write Error: {e}")
         finally:
             buffer.clear()
+
+    @staticmethod
+    def fetch(metadata: dict, db: Database, collection: Optional[Collection]) -> Any:
+        unique_key = metadata.get('unique_key')
+        env = metadata.get('env')
+
+        try:
+            coll = collection
+            if coll is None and db is not None and env:
+                coll = db[env]
+
+            if coll is not None:
+                doc = coll.find_one({"_id": unique_key})
+                if doc:
+                    doc.pop('_id', None)
+                    doc.pop('metadata', None)
+                return doc or {}
+        except Exception as e:
+            print(f"⚠️ [MongoDocStrategy] Error fetching document: {e}")
+            return {}
+        return {}

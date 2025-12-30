@@ -23,7 +23,7 @@ def calculate_sync_rows(
 
     # C. Determine "Previous" State based on SyncMode
     if sync_mode == SyncMode.LIVE_STATE:
-        db_raw = sink.read(file['metadata'])
+        db_raw = sink.fetch(file['metadata'])
         if is_file_strategy:
             prev_flat = flattener.process(parser.process(db_raw))
         else:
@@ -51,7 +51,7 @@ def calculate_sync_rows(
             rows.append(PipelineRow(key=k, value=v, kind=RowKind.UPDATE, metadata=file['metadata']))
 
     elif sync_mode == SyncMode.GIT_SMART_REPAIR:
-        db_raw = sink.read(file['metadata'])
+        db_raw = sink.fetch(file['metadata'])
         db_state = flattener.process(parser.process(db_raw)) if is_file_strategy else (db_raw or {})
         for k, v in diff['unchanged'].items():
             if k not in db_state or db_state[k] != v:

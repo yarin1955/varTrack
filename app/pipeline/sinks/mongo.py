@@ -33,37 +33,18 @@ class MongoSink(Sink):
             if self._config.collection:
                 self._collection = self._db[self._config.collection]
 
-    def read(self, metadata: dict) -> Any:
-        """
-        Fetches current state and strips internal fields to avoid fake flushes.
-        """
-        unique_key = metadata.get('unique_key')
-        env = metadata.get('env')
+    def disconnect(self) -> None:
+        """Closes the MongoDB connection and resets internal state."""
+        if self._client:
+            self._client.close()
+            self._client = None
+            self._db = None
+            self._collection = None
+            print("🔌 [MongoSink] Connection closed.")
 
-        if self._config.update_strategy == StrategyEnum.FILE:
-            try:
-                import gridfs
-                fs = gridfs.GridFS(self._db, collection=self._collection.name if self._collection else 'fs')
-                existing = fs.find_one({"filename": unique_key})
-                return existing.read().decode('utf-8') if existing else None
-            except: return None
-        else:
-            try:
-                # Explicit identity check to avoid PyMongo truth-value errors
-                coll = self._collection
-                if coll is None and self._db is not None and env:
-                    coll = self._db[env]
-
-                if coll is not None:
-                    doc = coll.find_one({"_id": unique_key})
-                    if doc:
-                        # STRIP INTERNAL FIELDS to prevent false diffs
-                        doc.pop('_id', None)
-                        doc.pop('metadata', None)
-                    return doc or {}
-            except Exception as e:
-                print(f"⚠️ [MongoSink] Error reading document: {e}")
-                return {}
+    def fetch(self, metadata: dict) -> Any:
+        """Delegates state retrieval to the current strategy."""
+        return self._strategy.fetch(metadata, self._db, self._collection)
 
     def write(self, row: PipelineRow) -> None:
         self._strategy.write(row, self._buffer, self._db, self._collection, self._config.buffer_size)
