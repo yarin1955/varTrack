@@ -1,5 +1,7 @@
 # app/business_logic/sync_engine.py
 from typing import Dict, Any, List
+
+from app.business_logic.json_pathmap import flatten_dfs
 from app.utils.enums.sync_mode import SyncMode
 from app.pipeline.pipeline_row import PipelineRow, RowKind
 from app.business_logic.compare_states import compare_states
@@ -20,6 +22,10 @@ def calculate_sync_rows(
 
     # B. Parse & Flatten Current Git State
     curr_flat = flattener.process(parser.process(file['current']))
+
+    if rule.variablesMap:
+        vars_to_sync = flatten_dfs(rule.variablesMap, as_kv=False)
+        curr_flat.update(vars_to_sync)
 
     # C. Determine "Previous" State based on SyncMode
     if sync_mode == SyncMode.LIVE_STATE:
