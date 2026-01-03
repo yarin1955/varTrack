@@ -5,10 +5,11 @@ from collections import defaultdict
 from pymongo.collection import Collection
 from pymongo.database import Database
 from app.pipeline.pipeline_row import PipelineRow, RowKind
+from app.pipeline.sink import Sink
 from app.utils.interfaces.istorage_strategy import IStorageStrategy
 
 
-class MongoFileStrategy(IStorageStrategy):
+class MongoFileStrategy(Sink):
     """
     File-based storage strategy for MongoDB using GridFS.
 
@@ -208,3 +209,48 @@ class MongoFileStrategy(IStorageStrategy):
             import traceback
             traceback.print_exc()
             return {}
+
+    @staticmethod
+    def delete(metadata: dict, db: Database, collection: Optional[Collection]) -> None:
+        """
+        Deletes an entire GridFS file.
+
+        Args:
+            metadata: Dictionary containing 'unique_key' (filename) and optionally 'env'
+            db: MongoDB database instance
+            collection: Optional collection (used for GridFS bucket name)
+        """
+        unique_key = metadata.get('unique_key')
+        env = metadata.get('env')
+
+        if not unique_key:
+            print("⚠️ [MongoFileStrategy] Cannot delete: No unique_key in metadata")
+            return
+
+        try:
+            # Determine GridFS bucket (support dynamic collections)
+            if collection is not None:
+                bucket_name = collection.name
+            elif env:
+                bucket_name = env
+            else:
+                bucket_name = 'fs'
+
+            fs = gridfs.GridFS(db, collection=bucket_name)
+
+            # Find the file
+            existing_file = fs.find_one({"filename": unique_key})
+
+            if not existing_file:
+                print(f"ℹ️ [MongoFileStrategy] File not found for deletion: {unique_key}")
+                return
+
+            # Delete the file
+            fs.delete(existing_file._id)
+            print(f"🗑️ [MongoFileStrategy] Deleted GridFS file: {unique_key} from bucket '{bucket_name}'")
+
+        except Exception as e:
+            print(f"❌ [MongoFileStrategy] Error deleting file {unique_key}: {e}")
+            import traceback
+            traceback.print_exc()
+            raise

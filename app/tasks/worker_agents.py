@@ -12,13 +12,11 @@ from app.utils.normalized_pr import NormalizedPR
 from app.utils.normalized_push import NormalizedPush
 from app.utils.normalized_commit import NormalizedCommit, FileChange
 from app.utils.enums.file_status import FileStatus
-from app.utils.enums.sync_mode import SyncMode
 from app.business_logic.sync_engine import calculate_sync_rows
 # Pipeline Components
 from app.pipeline.transforms.parser import ContentParser
 from app.pipeline.transforms.flattener import Flattenizer
-from app.business_logic.compare_states import compare_states
-from app.pipeline.pipeline_row import PipelineRow, RowKind
+
 
 
 def reconstruct_commit(commit_data: Dict[str, Any]) -> NormalizedCommit:
@@ -75,23 +73,42 @@ def data_manager(self, platform_config: dict, datasource_config: dict, normalize
     file_lifecycle = get_file_lifecycle(git_event=git_event, rule=rule, branch=branch)
 
     files_to_process = []
+    files_to_prune = []
+
+    # ============================================================================
+    # SEPARATE FILES: Process vs Prune
+    # ============================================================================
     for file_path, lifecycle in file_lifecycle.items():
+        latest_status = lifecycle['latest_status']
+        earliest_status = lifecycle['earliest_status']
+        match_context = lifecycle['match_context']
+
+        # Case 1: File was REMOVED - add to prune list
+        if latest_status == FileStatus.REMOVED:
+            if rule.prune or rule.pruneLast:
+                files_to_prune.append({
+                    'file_path': file_path,
+                    'metadata': match_context
+                })
+                print(f"🗑️  Marked for prune: {file_path}")
+            continue  # Skip normal processing
+
+        # Case 2: File was ADDED or MODIFIED - process normally
         current_hash = commit_sha
         previous_hash = before_sha
 
-        if lifecycle['latest_status'] == FileStatus.REMOVED:
-            current_hash = None
-        if lifecycle['earliest_status'] == FileStatus.ADDED:
+        # If file was just added, no previous version
+        if earliest_status == FileStatus.ADDED:
             previous_hash = None
 
         files_to_process.append({
             'file_path': file_path,
             'last_commit_hash': current_hash,
             'first_commit_hash': previous_hash,
-            'match_context': lifecycle['match_context']
+            'match_context': match_context
         })
 
-    if not files_to_process:
+    if not files_to_process and not files_to_prune:
         return {'status': 'skipped', 'reason': 'no matching files'}
 
     # 3. Initialize Pipeline Components
@@ -102,40 +119,85 @@ def data_manager(self, platform_config: dict, datasource_config: dict, normalize
     parser = ContentParser()
     flattener = Flattenizer(root_key="varTrack")
 
-    files_to_process = source.read(files_to_process, git_event.repository)
-
     processed_files = 0
     total_rows_written = 0
 
-    # 4. Process Synchronization per File
-    for file in files_to_process:
-        try:
-            # A. Resolve Sync Mode (passing is_file_strategy for AUTO decisions)
-            is_file_strategy = (datasource_config.get('update_strategy') == 'file')
-            rows = calculate_sync_rows(
-                file=file,
-                rule=rule,
-                sink=sink,
-                parser=parser,
-                flattener=flattener,
-                is_file_strategy=is_file_strategy
-            )
+    # 4. Fetch and Process Files (only if there are files to sync)
+    if files_to_process:
+        files_to_process = source.read(files_to_process, git_event.repository)
 
-            # F. Write Rows to Sink Buffer
-            for row in rows:
-                sink.write(row)
-                total_rows_written += 1
+        for file in files_to_process:
+            try:
+                is_file_strategy = (datasource_config.get('update_strategy') == 'file')
+                rows = calculate_sync_rows(
+                    file=file,
+                    rule=rule,
+                    sink=sink,
+                    parser=parser,
+                    flattener=flattener,
+                    is_file_strategy=is_file_strategy
+                )
 
-            processed_files += 1
+                for row in rows:
+                    sink.write(row)
+                    total_rows_written += 1
 
-        except Exception as e:
-            print(f"⚠️ [Engine] Skipped file {file['file_path']}: {e}")
+                processed_files += 1
 
-    # 5. Final flush to commit changes to the database
-    sink.flush()
+            except Exception as e:
+                print(f"⚠️ [Engine] Skipped file {file['file_path']}: {e}")
+
+    # ============================================================================
+    # 5. FLUSH STRATEGY
+    # ============================================================================
+
+    # If pruneLast=true AND we have files to prune: flush before pruning
+    # Otherwise: flush now
+    if files_to_prune and rule.pruneLast:
+        if total_rows_written > 0:
+            print(f"💾 [PruneLast] Flushing {total_rows_written} operations before prune...")
+            sink.flush()
+    else:
+        if total_rows_written > 0:
+            print(f"💾 Flushing {total_rows_written} operations...")
+            sink.flush()
+
+    # ============================================================================
+    # 6. PRUNE OPERATIONS
+    # ============================================================================
+
+    pruned_files = 0
+    protected_files = 0
+
+    if files_to_prune:
+        print(f"\n🗑️  Processing {len(files_to_prune)} prune operation(s)...")
+
+        for file_info in files_to_prune:
+            unique_key = file_info['metadata'].get('unique_key')
+
+            # Check protection
+            if rule.is_protected_from_prune(unique_key):
+                protected_files += 1
+                print(f"🛡️  PROTECTED: {unique_key}")
+                continue
+
+            try:
+                if rule.dryRunPrune:
+                    print(f"🔍 [DRY RUN] Would delete: {unique_key}")
+                    pruned_files += 1
+                else:
+                    sink.delete(file_info['metadata'])
+                    pruned_files += 1
+                    print(f"✅ Pruned: {unique_key}")
+            except Exception as e:
+                print(f"❌ Failed to prune {unique_key}: {e}")
+
+    sink.disconnect()
 
     return {
         'status': 'success',
         'processed_files': processed_files,
+        'pruned_files': pruned_files,
+        'protected_files': protected_files,
         'total_rows': total_rows_written,
     }
