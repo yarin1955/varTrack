@@ -65,3 +65,10 @@ class Sink(IFactory):
         Reads the current state from the destination system for comparison.
         """
         pass
+
+    @abstractmethod
+    def delete(self, *args, **kwargs) -> Any:
+        """
+        Reads the current state from the destination system for comparison.
+        """
+        pass

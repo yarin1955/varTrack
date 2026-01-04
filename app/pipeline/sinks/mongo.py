@@ -52,3 +52,7 @@ class MongoSink(Sink):
     def flush(self) -> None:
         if self._buffer:
             self._strategy.write(None, self._buffer, self._db, self._collection, 0)
+
+    def delete(self, metadata: dict) -> None:
+        """Delegates delete to the current strategy."""
+        self._strategy.delete(metadata, self._db, self._collection)

@@ -4,9 +4,10 @@ from pymongo import UpdateOne
 from pymongo.collection import Collection
 from pymongo.database import Database
 from app.pipeline.pipeline_row import PipelineRow, RowKind
+from app.pipeline.sink import Sink
 from app.utils.interfaces.istorage_strategy import IStorageStrategy
 
-class MongoDocumentStrategy(IStorageStrategy):
+class MongoDocumentStrategy(Sink):
     @staticmethod
     def write(row: Optional[PipelineRow], buffer: List[PipelineRow], db: Database,
               collection: Optional[Collection], buffer_size: int) -> None:
@@ -76,3 +77,36 @@ class MongoDocumentStrategy(IStorageStrategy):
             print(f"⚠️ [MongoDocStrategy] Error fetching document: {e}")
             return {}
         return {}
+
+    @staticmethod
+    def delete(metadata: dict, db: Database, collection: Optional[Collection]) -> None:
+
+        unique_key = metadata.get('unique_key')
+        env = metadata.get('env')
+
+        if not unique_key:
+            print("⚠️ [MongoDocStrategy] Cannot delete: No unique_key in metadata")
+            return
+
+        try:
+            # Determine target collection
+            target_collection = collection
+            if target_collection is None and db is not None and env:
+                target_collection = db[env]
+
+            if target_collection is None:
+                print(f"⚠️ [MongoDocStrategy] Cannot delete {unique_key}: No collection specified")
+                return
+
+            # Delete the document
+            result = target_collection.delete_one({"_id": unique_key})
+
+            if result.deleted_count > 0:
+                print(
+                    f"🗑️ [MongoDocStrategy] Deleted document: {unique_key} from collection '{target_collection.name}'")
+            else:
+                print(f"ℹ️ [MongoDocStrategy] Document not found for deletion: {unique_key}")
+
+        except Exception as e:
+            print(f"❌ [MongoDocStrategy] Error deleting {unique_key}: {e}")
+            raise

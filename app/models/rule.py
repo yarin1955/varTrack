@@ -34,7 +34,12 @@ class Rule(BaseModel):
     syncMode: SyncMode = SyncMode.AUTO
 
     overrides: Optional[List[RepositoryOverride]] = None
-    #prune: bool = False
+    prune: bool = False  # Enable automatic deletion of removed files
+    pruneLast: bool = False  # Delete after sync completes (safer)
+
+    # Optional: Safety mechanisms
+    pruneProtection: Optional[List[str]] = None  # Never delete these keys
+    dryRunPrune: bool = False  # Log what would be deleted without actually deleting
 
     model_config = ConfigDict(
         extra="ignore",         # ignore unknown fields
