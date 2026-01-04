@@ -4,7 +4,8 @@ import re
 import string
 
 from app.business_logic.dynamic_strategy import DynamicStrategySelector
-from app.utils.enums.sync_mode import SyncMode
+from app.utils.enums.sync_mode import SyncMode, ApplyStrategy
+
 
 class RuleMatch(BaseModel):
     unique_key: str
@@ -40,6 +41,9 @@ class Rule(BaseModel):
     # Optional: Safety mechanisms
     pruneProtection: Optional[List[str]] = None  # Never delete these keys
     dryRunPrune: bool = False  # Log what would be deleted without actually deleting
+
+    selfHeal: bool = True
+    applyStrategy: ApplyStrategy = ApplyStrategy.CLIENT_SIDE
 
     model_config = ConfigDict(
         extra="ignore",         # ignore unknown fields

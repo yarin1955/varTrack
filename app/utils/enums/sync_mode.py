@@ -1,5 +1,13 @@
 from enum import Enum
 
+class ApplyStrategy(Enum):
+    """
+    CLIENT_SIDE: varTrack calculates the diff locally and sends specific patches.
+    SERVER_SIDE: varTrack sends the desired state; for DBs this typically means 'Upsert All'.
+    """
+    CLIENT_SIDE = "client_side"
+    SERVER_SIDE = "server_side"
+
 class SyncMode(Enum):
     # Option 1: Git vs Git (Upsert All)
     # Writes everything (even unchanged) to DB.
