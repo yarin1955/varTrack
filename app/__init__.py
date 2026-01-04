@@ -2,8 +2,12 @@ from flask import Flask
 
 from .business_logic.initializer import initializer
 from .routers.webhooks import bp as webhooks_bp
+from .routers.self_healing import bp as self_healing_bp
+
 from .routers.tasks import bp as tasks_bp
 from .celery_app import init_celery
+from .tasks.watcher_agent import reconciliation_service
+
 
 def create_app(config_data: dict | None = None) -> Flask:
     app = Flask(__name__)
@@ -27,6 +31,12 @@ def create_app(config_data: dict | None = None) -> Flask:
     # Blueprints
     app.register_blueprint(webhooks_bp, url_prefix="/webhooks")
     app.register_blueprint(tasks_bp, url_prefix="/tasks")
+
+    app.register_blueprint(self_healing_bp, url_prefix="/self-healing")
+
+    # Start the background engine
+    if config_data.get("self_healing", {}).get("enabled", False):
+        reconciliation_service.start()
 
     init_celery(app)
 
