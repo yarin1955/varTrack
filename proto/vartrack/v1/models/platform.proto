@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+package vartrack.v1;
+
+// Import the specific platform schemas
+import "vartrack/v1/github.proto";
+import "vartrack/v1/models/platforms/github.proto";
+import "buf/validate/validate.proto";
+
+message Platform {
+  oneof config {
+    // Exactly one platform must be provided
+    option (buf.validate.field).required = true;
+
+    GitHubSettings github = 1;
+  }
+}

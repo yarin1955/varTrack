@@ -1,0 +1,35 @@
+# buf.gen.yaml
+version: v2
+managed:
+  enabled: true
+  override:
+    # This ensures Go imports match your module name in gateway-service/go.mod
+    - file_option: go_package_prefix
+      value: github.com/yarin1955/vartrack/gateway-service/internal/gen/proto/go
+
+plugins:
+  # --- GO GENERATION ---
+  # Generates standard Go structs
+  - remote: buf.build/protocolbuffers/go:v1.34.2
+    out: gateway-service/internal/gen/proto/go
+    opt: paths=source_relative
+
+  # Generates gRPC service interfaces for Go
+  - remote: buf.build/grpc/go:v1.5.1
+    out: gateway-service/internal/gen/proto/go
+    opt:
+      - paths=source_relative
+      - require_unimplemented_servers=false
+
+  # --- PYTHON GENERATION ---
+  # Generates standard Python classes
+  - remote: buf.build/protocolbuffers/python:v27.3
+    out: app/generated/proto/python
+
+  # Generates Type Hints (.pyi) for better IDE support in Python
+  - remote: buf.build/protocolbuffers/pyi:v27.3
+    out: app/generated/proto/python
+
+  # Generates gRPC client/server for Python
+  - remote: buf.build/grpc/python:v1.65.0
+    out: app/generated/proto/python

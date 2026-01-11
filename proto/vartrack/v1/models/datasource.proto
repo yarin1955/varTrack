@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+package vartrack.v1;
+
+// Import the specific datasource schemas
+import "vartrack/v1/mongo.proto";
+import "buf/validate/validate.proto";
+
+message DataSource {
+  oneof config {
+    // Exactly one datasource configuration must be provided
+    option (buf.validate.field).required = true;
+
+    MongoConfig mongo = 1;
+    // Future: PostgresConfig postgres = 2;
+  }
+}

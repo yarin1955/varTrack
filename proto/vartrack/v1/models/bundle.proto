@@ -1,0 +1,16 @@
+syntax = "proto3";
+
+package vartrack.v1;
+
+import "vartrack/v1/models/platform.proto";
+import "vartrack/v1/models/datasource.proto";
+import "vartrack/v1/models/rule.proto";
+import "vartrack/v1/models/schema_registry.proto";
+import "buf/validate/validate.proto";
+
+message Bundle {
+  repeated Platform platforms = 1 [(buf.validate.field).repeated.min_items = 1];
+  repeated DataSource datasources = 2 [(buf.validate.field).repeated.min_items = 1];
+  repeated Rule rules = 3 [(buf.validate.field).repeated.min_items = 1];
+  SchemaRegistry schema_registry = 4 [(buf.validate.field).required = true];
+}
