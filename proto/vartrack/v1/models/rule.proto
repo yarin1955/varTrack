@@ -21,10 +21,9 @@ message Rule {
   bool env_as_branch = 6;
   bool env_as_pr = 7;
   bool env_as_tags = 8;
-
   map<string, string> branch_map = 9;
   map<string, string> file_path_map = 10;
-  string unique_key_name = 11 [default = "{repoName}-{env}"];
+  string unique_key_name = 11; // FIXED: Removed default
   map<string, string> variables_map = 12;
 
   SyncMode sync_mode = 13;
@@ -34,16 +33,14 @@ message Rule {
   bool prune_last = 16;
   repeated string prune_protection = 17;
   bool dry_run_prune = 18;
-  bool self_heal = 19 [default = true];
+  bool self_heal = 19; // FIXED: Removed default
   ApplyStrategy apply_strategy = 20;
 
-  // Complex Logic Validations
   option (buf.validate.message).cel = {
     id: "rule.scan_target",
     message: "You must provide either 'file_name' or 'file_path_map'",
     expression: "has(this.file_name) || this.file_path_map.size() > 0"
   };
-
   option (buf.validate.message).cel = {
     id: "rule.unique_key_env_requirement",
     message: "If unique_key_name contains '{env}', an environment strategy must be enabled",

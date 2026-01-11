@@ -5,22 +5,22 @@ package vartrack.v1;
 import "buf/validate/validate.proto";
 
 message GitHubSettings {
-  // Constant name to identify the provider in the factory system
   string name = 1 [(buf.validate.field).string.const = "github"];
-
   string endpoint = 2 [(buf.validate.field).string.uri = true];
-  string protocol = 3 [(buf.validate.field).string.in = ["ssh", "http", "https"]];
 
-  // Credentials
+  // FIXED: Corrected 'in' list syntax
+  string protocol = 3 [(buf.validate.field).string = {in: ["ssh", "http", "https"]}];
+
   optional string token = 4;
   optional string username = 5;
   optional string password = 6;
   optional string secret = 7;
 
-  // GitHub Specifics
   optional string org_name = 8;
-  bool verify_ssl = 9 [default = true];
+  bool verify_ssl = 9; // FIXED: Removed illegal proto3 default
   int32 timeout = 10 [(buf.validate.field).int32.gte = 1];
   int32 max_retries = 11 [(buf.validate.field).int32.gte = 0];
-  int32 page_size = 12 [(buf.validate.field).int32 = {gte: 1, le: 100}];
+
+  // FIXED: Changed 'le' to 'lte'
+  int32 page_size = 12 [(buf.validate.field).int32 = {gte: 1, lte: 100}];
 }
