@@ -1,0 +1,31 @@
+syntax = "proto3";
+
+package vartrack.v1;
+
+import "buf/validate/validate.proto";
+
+message VaultConfig {
+  string name = 1 [(buf.validate.field).string.const = "vault"];
+  string endpoint = 2 [(buf.validate.field).string.uri = true];
+  string namespace = 3; // תמיכה ב-Vault Enterprise
+
+  // שיטות אימות נתמכות
+  string auth_method = 4 [(buf.validate.field).string = {in: ["token", "approle", "kubernetes", "userpass", "gcp", "aws"]}];
+
+  // הגדרות מנוע ה-KV
+  string mount_point = 5;
+  int32 kv_version = 6 [(buf.validate.field).int32 = {in: [1, 2]}];
+
+  // פרטי אימות (אופציונליים לפי השיטה שנבחרה)
+  optional string token = 7;
+  optional string role_id = 8;
+  optional string secret_id = 9;
+  optional string k8s_role = 10;
+  optional string k8s_jwt_path = 11;
+
+  // אבטחה וביצועים
+  bool verify_ssl = 12;
+  optional string ca_cert_path = 13;
+  int32 timeout = 14 [(buf.validate.field).int32.gte = 1];
+  int32 max_retries = 15;
+}
