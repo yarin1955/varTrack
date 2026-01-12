@@ -1,0 +1,13 @@
+syntax = "proto3";
+
+package vartrack.v1;
+
+import "vartrack/v1/models/monitoring/otel.proto";
+import "vartrack/v1/models/monitoring/prometheus.proto";
+
+message Monitoring {
+  optional OTelConfig otel = 1;
+
+  optional PrometheusConfig prometheus = 2;
+
+}

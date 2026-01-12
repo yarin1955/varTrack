@@ -1,0 +1,21 @@
+syntax = "proto3";
+
+package vartrack.v1;
+
+import "buf/validate/validate.proto";
+
+message PrometheusConfig {
+  bool enabled = 1;
+  string job_name = 2 [(buf.validate.field).string.min_len = 1];
+  string metrics_path = 3; // ברירת מחדל: /metrics
+  int32 port = 4 [(buf.validate.field).int32 = {gte: 1, lte: 65535}];
+
+  // Scraping
+  int32 scrape_interval_seconds = 5 [(buf.validate.field).int32.gte = 1];
+  map<string, string> external_labels = 6;
+
+  // Auth & Security
+  optional string basic_auth_user = 7;
+  optional string basic_auth_pass = 8;
+  bool enable_tls = 9;
+}

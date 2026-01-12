@@ -1,0 +1,33 @@
+syntax = "proto3";
+
+package vartrack.v1;
+
+import "buf/validate/validate.proto";
+
+message OTelConfig {
+  bool enabled = 1;
+  string endpoint = 2 [(buf.validate.field).string.uri = true];
+  string service_name = 3;
+  string service_version = 4;
+
+  string protocol = 5 [(buf.validate.field).string = {in: ["grpc", "http/protobuf", "http/json"]}];
+
+  // Headers (עבור אימות מול ספקים כמו Honeycomb או Lightstep)
+  map<string, string> headers = 6;
+
+  // Resource Attributes (Metadata שיוצמד לכל Trace/Metric)
+  map<string, string> resource_attributes = 7;
+
+  bool enable_traces = 8;
+  bool enable_metrics = 9;
+  bool enable_logs = 10;
+
+  // Batching & Performance
+  int32 batch_timeout_ms = 11;
+  int32 max_queue_size = 12;
+  string compression = 13; // gzip, zstd, none
+
+  // TLS
+  bool use_tls = 14;
+  optional string client_cert_path = 15;
+}
