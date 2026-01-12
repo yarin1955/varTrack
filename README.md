@@ -1,5 +1,3 @@
-Here's the corrected and properly formatted README.md:
-
 ```markdown
 # varTrack
 
