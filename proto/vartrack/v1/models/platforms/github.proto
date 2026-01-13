@@ -4,23 +4,37 @@ package vartrack.v1;
 
 import "buf/validate/validate.proto";
 
-message GitHubSettings {
+message GitHub {
+  // --- Identity ---
+  // Forced to "github" to match the factory registry key.
   string name = 1 [(buf.validate.field).string.const = "github"];
-  string endpoint = 2 [(buf.validate.field).string.uri = true];
 
-  // FIXED: Corrected 'in' list syntax
+  // --- Connection Settings ---
+  string endpoint = 2 [(buf.validate.field).string.uri = true];
   string protocol = 3 [(buf.validate.field).string = {in: ["ssh", "http", "https"]}];
 
+  // --- Credentials ---
   optional string token = 4;
   optional string username = 5;
   optional string password = 6;
   optional string secret = 7;
 
+  // --- Scope ---
   optional string org_name = 8;
-  bool verify_ssl = 9; // FIXED: Removed illegal proto3 default
+
+  // --- Reliability & Performance ---
+  bool verify_ssl = 9;
   int32 timeout = 10 [(buf.validate.field).int32.gte = 1];
   int32 max_retries = 11 [(buf.validate.field).int32.gte = 0];
-
-  // FIXED: Changed 'le' to 'lte'
   int32 page_size = 12 [(buf.validate.field).int32 = {gte: 1, lte: 100}];
+
+  // --- Webhook Header Configuration (Hardcoded Constants) ---
+  // These fulfill the contract defined in the base GitPlatform class.
+  string event_type_header = 13 [(buf.validate.field).string.const = "X-GitHub-Event"];
+  string git_scm_signature = 14 [(buf.validate.field).string.const = "X-Hub-Signature-256"];
+
+  // --- Event Name Constants (Hardcoded Constants) ---
+  // These represent the values checked by is_push_event and is_pr_event logic.
+  string push_event_name = 15 [(buf.validate.field).string.const = "push"];
+  string pr_event_name = 16 [(buf.validate.field).string.const = "pull_request"];
 }

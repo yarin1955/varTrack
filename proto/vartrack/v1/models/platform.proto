@@ -10,6 +10,6 @@ message Platform {
     // FIXED: Changed (buf.validate.field) to (buf.validate.oneof)
     option (buf.validate.oneof).required = true;
 
-    GitHubSettings github = 1;
+    GitHub github = 1;
   }
 }
