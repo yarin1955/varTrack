@@ -1,0 +1,34 @@
+syntax = "proto3";
+
+package vartrack.v1;
+
+import "buf/validate/validate.proto";
+
+// Orchestrator defines the core synchronization logic for varTrack.
+// It receives data from entry points (like the Go gateway) and manages the sync lifecycle.
+service Orchestrator {
+  // ProcessWebhook sends a raw webhook payload to the backend for processing.
+  rpc ProcessWebhook(ProcessWebhookRequest) returns (ProcessWebhookResponse);
+}
+
+message ProcessWebhookRequest {
+  // The git platform name (e.g., "github")
+  string platform = 1 [(buf.validate.field).string.min_len = 1];
+
+  // The target datasource name (e.g., "mongo")
+  string datasource = 2 [(buf.validate.field).string.min_len = 1];
+
+  // The unparsed body of the webhook used for signature verification
+  string raw_payload = 3 [(buf.validate.field).string.min_len = 1];
+
+  // HTTP headers containing metadata such as event types and signatures
+  map<string, string> headers = 4;
+}
+
+message ProcessWebhookResponse {
+  // The ID of the task created in the backend (e.g., Celery task ID)
+  string task_id = 1;
+
+  // A descriptive message about the operation status
+  string message = 2;
+}

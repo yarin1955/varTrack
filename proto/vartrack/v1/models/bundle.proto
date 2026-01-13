@@ -12,24 +12,17 @@ import "buf/validate/validate.proto";
 
 // Bundle מגדיר את חבילת הקונפיגורציה המלאה של המערכת
 message Bundle {
-  // רשימת פלטפורמות הגיט המוגדרות במערכת
   repeated Platform platforms = 1 [(buf.validate.field).repeated.min_items = 1];
 
-  // רשימת מקורות הנתונים (כמו MongoDB) לסנכרון
   repeated DataSource datasources = 2 [(buf.validate.field).repeated.min_items = 1];
 
-  // חוקי הסנכרון והקישור בין פלטפורמות למקורות נתונים
   repeated Rule rules = 3 [(buf.validate.field).repeated.min_items = 1];
 
-  // הגדרת מאגר הסכמות המרכזי
   SchemaRegistry schema_registry = 4 [(buf.validate.field).required = true];
 
-  // ספקי ניהול סודות (כמו Vault או AWS Secrets Manager)
   repeated SecretsManager secrets_managers = 5;
 
-  // הגדרות ניטור מרכזיות (OTel, Prometheus, ELK וכו')
-  Monitoring monitoring = 6;
+  optional Monitoring monitoring = 6;
 
-  // תגיות גלובליות שיוצמדו לכל המשאבים במערכת
   map<string, string> global_tags = 7;
 }
