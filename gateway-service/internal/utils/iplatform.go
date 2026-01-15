@@ -1,6 +1,6 @@
 package utils
 
-type Platform interface {
+type IPlatform interface {
 	// EventTypeHeader returns the HTTP header key used by the provider
 	// for event types (e.g. 'X-GitHub-Event')
 	EventTypeHeader() string
@@ -19,5 +19,11 @@ type Platform interface {
 	// based on settings
 	ConstructCloneURL(repo string) string
 
-	CreateWebhook(endpoint string) error
+	CreateWebhook(repoName string, endpoint string) error
+
+	Auth() error
+
+	Close()
+
+	GetRepos(patterns []string) ([]string, error)
 }
