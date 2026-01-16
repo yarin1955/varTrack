@@ -5,9 +5,7 @@ type IPlatform interface {
 	// for event types (e.g. 'X-GitHub-Event')
 	EventTypeHeader() string
 
-	// GitSCMSignature returns the HTTP header key used for webhook
-	// signature verification
-	GitSCMSignature() string
+	GetGitScmSignature() string
 
 	// IsPushEvent checks if the given event type is a push event
 	IsPushEvent(eventType string) bool
@@ -26,4 +24,6 @@ type IPlatform interface {
 	Close()
 
 	GetRepos(patterns []string) ([]string, error)
+
+	GetSecret() string
 }
