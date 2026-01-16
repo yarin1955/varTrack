@@ -23,7 +23,7 @@ type GitHub struct {
 
 func init() {
 	// Explicitly configuring the registry key for this implementation.
-	utils.Register("github", Create)
+	utils.Register("github", &pb_models.Platform_Github{}, Create)
 }
 
 func Create(p *pb_models.Platform) (utils.IPlatform, error) {
@@ -86,11 +86,7 @@ func (g *GitHub) ConstructCloneURL(repo string) string {
 }
 
 func (g *GitHub) CreateWebhook(repoName string, endpoint string) error {
-	// 1. Determine the API base URL
 	apiURL := g.getBaseAPIURL()
-
-	// 2. Construct the Target Webhook URL (The 'Payload URL' in GitHub)
-	// This uses your service's endpoint logic: {base_url}/{endpoint}
 	targetURL := fmt.Sprintf("%s/%s", strings.TrimSuffix(g.GitHub.Endpoint, "/"), endpoint)
 
 	insecureSSL := "0"
@@ -98,7 +94,6 @@ func (g *GitHub) CreateWebhook(repoName string, endpoint string) error {
 		insecureSSL = "1"
 	}
 
-	// 3. Define the payload for GitHub API
 	payload := map[string]interface{}{
 		"name":   "web",
 		"active": true,
@@ -116,8 +111,6 @@ func (g *GitHub) CreateWebhook(repoName string, endpoint string) error {
 		return fmt.Errorf("failed to marshal webhook payload: %w", err)
 	}
 
-	// 4. Construct the API Request URL
-	// GitHub requires: /repos/{owner}/{repo}/hooks
 	reqURL := fmt.Sprintf("%s/repos/%s/%s/hooks", apiURL, g.GitHub.GetOrgName(), repoName)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(g.GitHub.Timeout)*time.Second)
@@ -128,20 +121,20 @@ func (g *GitHub) CreateWebhook(repoName string, endpoint string) error {
 		return err
 	}
 
-	// 5. Set Headers
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("Content-Type", "application/json")
 	if token := g.GitHub.GetToken(); token != "" {
 		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token))
 	}
 
-	// 6. Execute Request
-	client := &http.Client{}
-	resp, err := client.Do(req)
+	// FIX: Use g.client (to respect SSL/Timeout) and handle Close error
+	resp, err := g.client.Do(req)
 	if err != nil {
 		return fmt.Errorf("failed to execute webhook creation: %w", err)
 	}
-	defer resp.Body.Close()
+
+	// FIX: Handle unhandled Close error
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode >= 300 {
 		return fmt.Errorf("github api returned error: %s (status code: %d)", resp.Status, resp.StatusCode)
@@ -150,8 +143,16 @@ func (g *GitHub) CreateWebhook(repoName string, endpoint string) error {
 	return nil
 }
 
+func (g *GitHub) GetSecret() string {
+	// Call the getter on the embedded Protobuf struct
+	return g.GitHub.GetSecret()
+}
+
+func (g *GitHub) GetGitScmSignature() string {
+	return g.GitHub.GetGitScmSignature()
+}
+
 func (g *GitHub) Auth() error {
-	// 1. Initialize the client with a custom Transport if needed (e.g., for SSL verification)
 	tr := &http.Transport{
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: !g.GitHub.VerifySsl},
 	}
@@ -161,14 +162,12 @@ func (g *GitHub) Auth() error {
 		Timeout:   time.Duration(g.GitHub.Timeout) * time.Second,
 	}
 
-	// 2. Verify connection (Lazy Check)
 	reqURL := fmt.Sprintf("%s/user", g.getBaseAPIURL())
 	req, err := http.NewRequest("GET", reqURL, nil)
 	if err != nil {
 		return err
 	}
 
-	// Set Auth Header
 	if token := g.GitHub.GetToken(); token != "" {
 		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token))
 	}
@@ -177,7 +176,9 @@ func (g *GitHub) Auth() error {
 	if err != nil {
 		return fmt.Errorf("github connection failed: %w", err)
 	}
-	defer resp.Body.Close()
+
+	// FIX: Defer closure and ignore error explicitly to satisfy linter
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("github auth failed with status: %s", resp.Status)
@@ -197,14 +198,10 @@ func (g *GitHub) Close() {
 }
 
 func (g *GitHub) GetRepos(patterns []string) ([]string, error) {
-	// 1. Internal Context Management
-	// Uses the timeout from the GitHub protobuf model
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(g.GitHub.Timeout)*time.Second)
 	defer cancel()
 
-	// 2. Determine API Base (GitHub.com vs Enterprise)
 	apiBase := g.getBaseAPIURL()
-
 	var nextURL string
 	if org := g.GitHub.GetOrgName(); org != "" {
 		nextURL = fmt.Sprintf("%s/orgs/%s/repos?per_page=100", apiBase, org)
@@ -213,9 +210,7 @@ func (g *GitHub) GetRepos(patterns []string) ([]string, error) {
 	}
 
 	resolvedSet := make(map[string]struct{})
-	client := &http.Client{}
 
-	// 3. Paginated Fetch & Match
 	for nextURL != "" {
 		req, err := http.NewRequestWithContext(ctx, "GET", nextURL, nil)
 		if err != nil {
@@ -227,31 +222,31 @@ func (g *GitHub) GetRepos(patterns []string) ([]string, error) {
 			req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token))
 		}
 
-		resp, err := client.Do(req)
+		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
 			return nil, err
 		}
-		defer resp.Body.Close()
 
+		// BODY FIX: Close at the end of the loop iteration, AFTER reading.
+		// Do not use 'defer' inside a loop.
 		if resp.StatusCode != http.StatusOK {
+			_ = resp.Body.Close()
 			return nil, fmt.Errorf("github api error: %s", resp.Status)
 		}
 
 		var repos []struct {
-			FullName string `json:"full_name"` // e.g., "owner/repo"
+			FullName string `json:"full_name"`
 		}
-		if err := json.NewDecoder(resp.Body).Decode(&repos); err != nil {
-			return nil, err
+		decodeErr := json.NewDecoder(resp.Body).Decode(&repos)
+		_ = resp.Body.Close() // Close immediately after reading
+
+		if decodeErr != nil {
+			return nil, fmt.Errorf("failed to decode repos: %w", decodeErr)
 		}
 
-		// 4. Pattern Matching against Full Name
 		for _, repo := range repos {
 			for _, pattern := range patterns {
-				// Use path.Match for URL-style slash awareness
-				matched, err := path.Match(pattern, repo.FullName)
-				if err != nil {
-					return nil, fmt.Errorf("invalid pattern %s: %w", pattern, err)
-				}
+				matched, _ := path.Match(pattern, repo.FullName)
 				if matched {
 					resolvedSet[repo.FullName] = struct{}{}
 					break
@@ -259,11 +254,9 @@ func (g *GitHub) GetRepos(patterns []string) ([]string, error) {
 			}
 		}
 
-		// Parse 'Link' header for next page
 		nextURL = g.getNextPageURL(resp.Header.Get("Link"))
 	}
 
-	// 5. Build result slice
 	result := make([]string, 0, len(resolvedSet))
 	for repo := range resolvedSet {
 		result = append(result, repo)
