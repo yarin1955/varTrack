@@ -22,8 +22,7 @@ type GitHub struct {
 }
 
 func init() {
-	// Explicitly configuring the registry key for this implementation.
-	utils.Register("github", &pb_models.Platform_Github{}, Create)
+	utils.PlatformRegistry.Register(Create)
 }
 
 func Create(p *pb_models.Platform) (utils.IPlatform, error) {
