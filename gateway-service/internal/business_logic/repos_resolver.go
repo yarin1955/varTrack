@@ -8,7 +8,7 @@ import (
 )
 
 // ResolveRuleRepositories coordinates the Rule and the Platform
-func ResolveRuleRepositories(rule *models.Rule, p utils.IPlatform) ([]string, error) {
+func ResolveRuleRepositories(rule *models.Rule, p utils.Platform) ([]string, error) {
 	var err error
 
 	repos := rule.GetAllInclusionPatterns()

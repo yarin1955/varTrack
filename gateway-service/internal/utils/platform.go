@@ -1,0 +1,36 @@
+package utils
+
+import (
+	"context"
+	pb_models "gateway-service/internal/gen/proto/go/vartrack/v1/models"
+)
+
+type Platform interface {
+	// EventTypeHeader returns the HTTP header key used by the provider for event types
+	EventTypeHeader() string
+
+	GetGitScmSignature() string
+
+	// IsPushEvent checks if the given event type is a push event
+	IsPushEvent(eventType string) bool
+
+	// IsPREvent checks if the given event type is a pull request event
+	IsPREvent(eventType string) bool
+
+	// ConstructCloneURL generates the git clone URL
+	ConstructCloneURL(repo string) string
+
+	// CreateWebhook registers a webhook on the platform
+	CreateWebhook(ctx context.Context, repoName string, endpoint string) error
+
+	// Auth validates credentials against the platform
+	Auth(ctx context.Context) error
+
+	Open(ctx context.Context, config *pb_models.Platform) (Platform, error)
+	Close(ctx context.Context) error
+
+	// GetRepos returns a list of repos matching the glob patterns
+	GetRepos(ctx context.Context, patterns []string) ([]string, error)
+
+	GetSecret() string
+}

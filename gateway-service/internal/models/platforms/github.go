@@ -16,193 +16,91 @@ import (
 	"time"
 )
 
+var (
+	_ utils.Platform = (*GitHub)(nil)
+)
+
+func init() {
+	utils.Register("github", newPlatform)
+}
+
 type GitHub struct {
-	*pb_gh.GitHub
+	config *pb_gh.GitHub
 	client *http.Client
 }
 
-func init() {
-	utils.PlatformRegistry.Register(Create)
+func newPlatform() utils.Platform {
+	return &GitHub{}
 }
 
-func Create(p *pb_models.Platform) (utils.IPlatform, error) {
-	// Logic to initialize the GitHub source
-	return &GitHub{GitHub: p.GetGithub()}, nil
-}
-
-func (g *GitHub) EventTypeHeader() string {
-	return g.GitHub.EventTypeHeader
-}
-
-func (g *GitHub) GitSCMSignature() string {
-	return g.GitHub.GitScmSignature
-}
-
-func (g *GitHub) IsPushEvent(eventType string) bool {
-	return eventType == g.GitHub.PushEventName
-}
-
-func (g *GitHub) IsPREvent(eventType string) bool {
-	return eventType == g.GitHub.PrEventName
-}
-
-// ConstructCloneURL derives the git URL from the single endpoint provided
-func (g *GitHub) ConstructCloneURL(repo string) string {
-	// 1. Normalize Repo (Ensure owner/repo)
-	fullRepo := repo
-	if !strings.Contains(repo, "/") {
-		owner := g.GitHub.GetOrgName()
-		if owner == "" {
-			owner = g.GitHub.GetUsername()
-		}
-		if owner != "" {
-			fullRepo = fmt.Sprintf("%s/%s", owner, repo)
-		}
+func (g *GitHub) Open(ctx context.Context, config *pb_models.Platform) (utils.Platform, error) {
+	// 1. Extract the GitHub-specific data from the oneof "envelope"
+	ghConfig := config.GetGithub()
+	if ghConfig == nil {
+		return nil, fmt.Errorf("github driver: configuration is missing or is not a GitHub type")
 	}
 
-	u, _ := url.Parse(g.GitHub.Endpoint)
-	domain := u.Host
+	// 2. Store the config for use in other methods (Auth, GetRepos, etc.)
+	g.config = ghConfig
 
-	// 2. Handle SSH
-	if g.GitHub.Protocol == "ssh" {
-		return fmt.Sprintf("git@%s:%s.git", domain, fullRepo)
-	}
-
-	// 3. Handle HTTPS/HTTP
-	scheme := u.Scheme
-	if scheme == "" {
-		scheme = "https"
-	}
-
-	auth := ""
-	if token := g.GitHub.GetToken(); token != "" {
-		auth = fmt.Sprintf("%s@", token)
-	} else if user, pass := g.GitHub.GetUsername(), g.GitHub.GetPassword(); user != "" && pass != "" {
-		auth = fmt.Sprintf("%s:%s@", user, pass)
-	}
-
-	return fmt.Sprintf("%s://%s%s/%s.git", scheme, auth, domain, fullRepo)
-}
-
-func (g *GitHub) CreateWebhook(repoName string, endpoint string) error {
-	apiURL := g.getBaseAPIURL()
-	targetURL := fmt.Sprintf("%s/%s", strings.TrimSuffix(g.GitHub.Endpoint, "/"), endpoint)
-
-	insecureSSL := "0"
-	if !g.GitHub.VerifySsl {
-		insecureSSL = "1"
-	}
-
-	payload := map[string]interface{}{
-		"name":   "web",
-		"active": true,
-		"events": []string{g.GitHub.PushEventName, g.GitHub.PrEventName},
-		"config": map[string]interface{}{
-			"url":          targetURL,
-			"content_type": "json",
-			"secret":       g.GitHub.GetSecret(),
-			"insecure_ssl": insecureSSL,
+	// 3. Configure the HTTP Transport
+	// We handle SSL verification based on the proto 'verify_ssl' field
+	transport := &http.Transport{
+		TLSClientConfig: &tls.Config{
+			InsecureSkipVerify: !ghConfig.GetVerifySsl(),
 		},
 	}
 
-	jsonData, err := json.Marshal(payload)
-	if err != nil {
-		return fmt.Errorf("failed to marshal webhook payload: %w", err)
-	}
-
-	reqURL := fmt.Sprintf("%s/repos/%s/%s/hooks", apiURL, g.GitHub.GetOrgName(), repoName)
-
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(g.GitHub.Timeout)*time.Second)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(ctx, "POST", reqURL, bytes.NewBuffer(jsonData))
-	if err != nil {
-		return err
-	}
-
-	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("Content-Type", "application/json")
-	if token := g.GitHub.GetToken(); token != "" {
-		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token))
-	}
-
-	// FIX: Use g.client (to respect SSL/Timeout) and handle Close error
-	resp, err := g.client.Do(req)
-	if err != nil {
-		return fmt.Errorf("failed to execute webhook creation: %w", err)
-	}
-
-	// FIX: Handle unhandled Close error
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode >= 300 {
-		return fmt.Errorf("github api returned error: %s (status code: %d)", resp.Status, resp.StatusCode)
-	}
-
-	return nil
-}
-
-func (g *GitHub) GetSecret() string {
-	// Call the getter on the embedded Protobuf struct
-	return g.GitHub.GetSecret()
-}
-
-func (g *GitHub) GetGitScmSignature() string {
-	return g.GitHub.GetGitScmSignature()
-}
-
-func (g *GitHub) Auth() error {
-	tr := &http.Transport{
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: !g.GitHub.VerifySsl},
-	}
-
+	// 4. Initialize the client
 	g.client = &http.Client{
-		Transport: tr,
-		Timeout:   time.Duration(g.GitHub.Timeout) * time.Second,
+		Transport: transport,
+		// Convert int32 seconds from proto to time.Duration
+		Timeout: time.Duration(ghConfig.GetTimeout()) * time.Second,
 	}
 
-	reqURL := fmt.Sprintf("%s/user", g.getBaseAPIURL())
-	req, err := http.NewRequest("GET", reqURL, nil)
-	if err != nil {
-		return err
-	}
-
-	if token := g.GitHub.GetToken(); token != "" {
-		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token))
-	}
-
-	resp, err := g.client.Do(req)
-	if err != nil {
-		return fmt.Errorf("github connection failed: %w", err)
-	}
-
-	// FIX: Defer closure and ignore error explicitly to satisfy linter
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("github auth failed with status: %s", resp.Status)
-	}
-
-	return nil
+	// Return the initialized instance (g) as the IPlatform interface
+	return g, nil
 }
 
-func (g *GitHub) Close() {
+func (g *GitHub) Close(ctx context.Context) error {
 	if g.client != nil {
-		// Close idle connections to "disconnect" from the SCM host
 		if tr, ok := g.client.Transport.(*http.Transport); ok {
 			tr.CloseIdleConnections()
 		}
-		g.client = nil
 	}
+	return nil
 }
 
-func (g *GitHub) GetRepos(patterns []string) ([]string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(g.GitHub.Timeout)*time.Second)
-	defer cancel()
+func (g *GitHub) EventTypeHeader() string    { return g.config.EventTypeHeader }
+func (g *GitHub) GetGitScmSignature() string { return g.config.GitScmSignature }
+func (g *GitHub) IsPushEvent(et string) bool { return et == g.config.PushEventName }
+func (g *GitHub) IsPREvent(et string) bool   { return et == g.config.PrEventName }
+func (g *GitHub) GetSecret() string          { return g.config.GetSecret() }
 
+func (g *GitHub) Auth(ctx context.Context) error {
+	reqURL := fmt.Sprintf("%s/user", g.getBaseAPIURL())
+	req, err := http.NewRequestWithContext(ctx, "GET", reqURL, nil)
+	if err != nil {
+		return err
+	}
+
+	g.setAuthHeader(req)
+	resp, err := g.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("github auth failed: %s", resp.Status)
+	}
+	return nil
+}
+
+func (g *GitHub) GetRepos(ctx context.Context, patterns []string) ([]string, error) {
 	apiBase := g.getBaseAPIURL()
 	var nextURL string
-	if org := g.GitHub.GetOrgName(); org != "" {
+	if org := g.config.GetOrgName(); org != "" {
 		nextURL = fmt.Sprintf("%s/orgs/%s/repos?per_page=100", apiBase, org)
 	} else {
 		nextURL = fmt.Sprintf("%s/user/repos?per_page=100", apiBase)
@@ -216,20 +114,16 @@ func (g *GitHub) GetRepos(patterns []string) ([]string, error) {
 			return nil, err
 		}
 
+		g.setAuthHeader(req)
 		req.Header.Set("Accept", "application/vnd.github+json")
-		if token := g.GitHub.GetToken(); token != "" {
-			req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token))
-		}
 
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := g.client.Do(req)
 		if err != nil {
 			return nil, err
 		}
 
-		// BODY FIX: Close at the end of the loop iteration, AFTER reading.
-		// Do not use 'defer' inside a loop.
 		if resp.StatusCode != http.StatusOK {
-			_ = resp.Body.Close()
+			resp.Body.Close()
 			return nil, fmt.Errorf("github api error: %s", resp.Status)
 		}
 
@@ -237,22 +131,20 @@ func (g *GitHub) GetRepos(patterns []string) ([]string, error) {
 			FullName string `json:"full_name"`
 		}
 		decodeErr := json.NewDecoder(resp.Body).Decode(&repos)
-		_ = resp.Body.Close() // Close immediately after reading
+		resp.Body.Close()
 
 		if decodeErr != nil {
-			return nil, fmt.Errorf("failed to decode repos: %w", decodeErr)
+			return nil, decodeErr
 		}
 
 		for _, repo := range repos {
 			for _, pattern := range patterns {
-				matched, _ := path.Match(pattern, repo.FullName)
-				if matched {
+				if matched, _ := path.Match(pattern, repo.FullName); matched {
 					resolvedSet[repo.FullName] = struct{}{}
 					break
 				}
 			}
 		}
-
 		nextURL = g.getNextPageURL(resp.Header.Get("Link"))
 	}
 
@@ -263,12 +155,69 @@ func (g *GitHub) GetRepos(patterns []string) ([]string, error) {
 	return result, nil
 }
 
-// Helper: Extracts the 'next' URL from GitHub's Link header
-func (g *GitHub) getNextPageURL(linkHeader string) string {
-	if linkHeader == "" {
-		return ""
+func (g *GitHub) CreateWebhook(ctx context.Context, repoName, endpoint string) error {
+	apiURL := g.getBaseAPIURL()
+	targetURL := fmt.Sprintf("%s/%s", strings.TrimSuffix(g.config.Endpoint, "/"), endpoint)
+
+	insecureSSL := "0"
+	if !g.config.VerifySsl {
+		insecureSSL = "1"
 	}
-	// Format: <url>; rel="next", <url>; rel="last"
+
+	payload := map[string]interface{}{
+		"name":   "web",
+		"active": true,
+		"events": []string{g.config.PushEventName, g.config.PrEventName},
+		"config": map[string]interface{}{
+			"url":          targetURL,
+			"content_type": "json",
+			"secret":       g.config.GetSecret(),
+			"insecure_ssl": insecureSSL,
+		},
+	}
+
+	jsonData, _ := json.Marshal(payload)
+	reqURL := fmt.Sprintf("%s/repos/%s/%s/hooks", apiURL, g.config.GetOrgName(), repoName)
+
+	req, err := http.NewRequestWithContext(ctx, "POST", reqURL, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return err
+	}
+
+	g.setAuthHeader(req)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := g.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("github webhook creation failed: %s", resp.Status)
+	}
+	return nil
+}
+
+// Helpers
+func (g *GitHub) setAuthHeader(req *http.Request) {
+	if token := g.config.GetToken(); token != "" {
+		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token))
+	}
+}
+
+func (g *GitHub) getBaseAPIURL() string {
+	endpoint := strings.TrimSuffix(g.config.Endpoint, "/")
+	if endpoint == "" || strings.Contains(endpoint, "github.com") {
+		return "https://api.github.com"
+	}
+	if !strings.Contains(endpoint, "/api/v3") {
+		return endpoint + "/api/v3"
+	}
+	return endpoint
+}
+
+func (g *GitHub) getNextPageURL(linkHeader string) string {
 	for _, link := range strings.Split(linkHeader, ",") {
 		parts := strings.Split(strings.TrimSpace(link), ";")
 		if len(parts) > 1 && strings.TrimSpace(parts[1]) == `rel="next"` {
@@ -278,14 +227,22 @@ func (g *GitHub) getNextPageURL(linkHeader string) string {
 	return ""
 }
 
-// Helper: Standardizes the API URL for GitHub.com vs Enterprise
-func (g *GitHub) getBaseAPIURL() string {
-	endpoint := strings.TrimSuffix(g.GitHub.Endpoint, "/")
-	if endpoint == "" || strings.Contains(endpoint, "github.com") {
-		return "https://api.github.com"
+func (g *GitHub) ConstructCloneURL(repo string) string {
+	fullRepo := repo
+	if !strings.Contains(repo, "/") {
+		owner := g.config.GetOrgName()
+		if owner == "" {
+			owner = g.config.GetUsername()
+		}
+		fullRepo = fmt.Sprintf("%s/%s", owner, repo)
 	}
-	if !strings.Contains(endpoint, "/api/v3") {
-		return endpoint + "/api/v3"
+	u, _ := url.Parse(g.config.Endpoint)
+	if g.config.Protocol == "ssh" {
+		return fmt.Sprintf("git@%s:%s.git", u.Host, fullRepo)
 	}
-	return endpoint
+	auth := ""
+	if token := g.config.GetToken(); token != "" {
+		auth = fmt.Sprintf("%s@", token)
+	}
+	return fmt.Sprintf("%s://%s%s/%s.git", u.Scheme, auth, u.Host, fullRepo)
 }

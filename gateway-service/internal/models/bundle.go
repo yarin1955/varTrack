@@ -9,8 +9,7 @@ type Bundle struct {
 }
 
 func NewBundle(pbBundle *pb.Bundle) *Bundle {
-	b := &Bundle{
+	return &Bundle{
 		Bundle: pbBundle,
 	}
-	return b
 }
