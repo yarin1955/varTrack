@@ -2,32 +2,38 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"gateway-service/internal"
 	"gateway-service/internal/config"
+	pb "gateway-service/internal/gen/proto/go/vartrack/v1/services"
 	"log"
+
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 func main() {
 	ctx := context.Background()
 
 	// Load from CUE file
-	bundleService, err := config.NewBundle("./cmd/config.cue")
+	bundleService, err := config.NewBundle("./../../xx.cue")
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 	}
 	defer bundleService.Close(ctx)
 
-	// Test: Get GitHub platform (name is "github" as defined in the proto const)
-	github, err := bundleService.GetPlatform(ctx, "github")
+	conn, err := grpc.Dial(
+		"localhost:50051", // Update with your orchestrator address
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
 	if err != nil {
-		log.Fatalf("Failed to get GitHub: %v", err)
+		log.Fatalf("Failed to connect to orchestrator: %v", err)
 	}
+	defer conn.Close()
 
-	fmt.Println("GitHub Signature Header:", github.GetGitScmSignature())
+	grpcClient := pb.NewOrchestratorClient(conn)
 
-	// Create router with bundleService
-	r := internal.NewRouter(bundleService)
+	// Create router with both dependencies
+	r := internal.NewRouter(bundleService, grpcClient)
 
 	// Start server
 	internal.Run(":5657", r)

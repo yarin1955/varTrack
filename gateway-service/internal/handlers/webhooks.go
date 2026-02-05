@@ -1,104 +1,28 @@
-//package handlers
-//
-//import (
-//	"fmt"
-//	"gateway-service/internal/business_logic"
-//	"gateway-service/internal/config" // Your CUE loader package
-//	"net/http"
-//)
-//
-//type WebhookHandler struct {
-//	platformFactory *business_logic.PlatformFactory
-//	configLoader    *config.Loader // This is your CUE loader
-//}
-//
-//func NewWebhookHandler(pf *business_logic.PlatformFactory, cl *config.Loader) *WebhookHandler {
-//	return &WebhookHandler{
-//		platformFactory: pf,
-//		configLoader:    cl,
-//	}
-//}
-//
-//func (h *WebhookHandler) Handle(w http.ResponseWriter, r *http.Request) {
-//	ctx := r.Context()
-//
-//	// 1. Path Params
-//	platformName := r.PathValue("platform")
-//	datasourceName := r.PathValue("datasource")
-//
-//	// 2. Load from CUE (Resolving config into the Protobuf struct)
-//	// Assuming your configLoader has a method that returns *pb_models.Platform
-//	platformConfig, err := h.configLoader.GetPlatformConfig(platformName)
-//	if err != nil {
-//		http.Error(w, "Platform config not found in CUE", http.StatusNotFound)
-//		return
-//	}
-//
-//	// 3. Use Factory to get Driver
-//	driver, err := h.platformFactory.GetPlatformDriver(ctx, platformConfig)
-//	if err != nil {
-//		http.Error(w, fmt.Sprintf("Factory error: %v", err), http.StatusInternalServerError)
-//		return
-//	}
-//	defer driver.Close()
-//
-//	// 4. Use Driver Interface
-//	if err := driver.Auth(); err != nil {
-//		http.Error(w, "Auth failed", http.StatusUnauthorized)
-//		return
-//	}
-//
-//	fmt.Fprintf(w, "Handled %s for %s", platformName, datasourceName)
-//}
-
 package handlers
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
-	"gateway-service/internal/config"
+	pb "gateway-service/internal/gen/proto/go/vartrack/v1/services"
+	"gateway-service/internal/models"
+	"io"
 	"net/http"
 	"strings"
+	"time"
 )
 
-//type WebhookHandler struct {
-//	bundle *models.Bundle
-//	client pb.OrchestratorClient // Inject the gRPC client
-//}
-//
-//func NewWebhookHandler(bundle *models.Bundle, client pb.OrchestratorClient) *WebhookHandler {
-//	return &WebhookHandler{
-//		bundle: bundle,
-//		client: client,
-//	}
-//}
-
-// type WebhookHandler struct{}
-
-// func NewWebhookHandler() *WebhookHandler {
-// 	return &WebhookHandler{}
-// }
-
-// type PlatformHandler struct {
-// 	platformService *config.PlatformService
-// }
-
-// func NewPlatformHandler(platformService *config.PlatformService) *PlatformHandler {
-// 	return &PlatformHandler{
-// 		platformService: platformService,
-// 	}
-// }
-
 type WebhookHandler struct {
-    platformService *config.PlatformService
+	bundleService *models.Bundle
+	client        pb.OrchestratorClient
 }
 
-func NewWebhookHandler(platformService *config.PlatformService) *WebhookHandler {
-    return &WebhookHandler{
-        platformService: platformService,
-    }
+func NewWebhookHandler(bundleService *models.Bundle, client pb.OrchestratorClient) *WebhookHandler {
+	return &WebhookHandler{
+		bundleService: bundleService,
+		client:        client,
+	}
 }
 
 func (h *WebhookHandler) Handle(w http.ResponseWriter, r *http.Request) {
@@ -106,14 +30,16 @@ func (h *WebhookHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	// Get platform name from query parameter or path
-	platformName := r.URL.Query().Get("platform")
+	platformName := r.PathValue("platform")
+	datasourceName := r.PathValue("datasource")
+
 	if platformName == "" {
 		http.Error(w, "platform name is required", http.StatusBadRequest)
 		return
 	}
 
 	// Get platform instance
-	platform, err := h.platformService.GetPlatform(ctx, platformName)
+	platform, err := h.bundleService.GetPlatform(ctx, platformName)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
@@ -121,58 +47,48 @@ func (h *WebhookHandler) Handle(w http.ResponseWriter, r *http.Request) {
 
 	// Get the signature
 	signature := platform.GetGitScmSignature()
+	secret := platform.GetSecret()
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{
-		"platform":  platformName,
-		"signature": signature,
+	// 4. Read the body for verification
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "Failed to read request body", http.StatusInternalServerError)
+		return
+	}
+
+	if !verifySignature(body, secret, signature) {
+		http.Error(w, "Invalid signature", http.StatusUnauthorized)
+		return
+	}
+
+	// 3. Prepare headers for the gRPC request
+	headers := make(map[string]string)
+	for k, v := range r.Header {
+		if len(v) > 0 {
+			headers[k] = v[0]
+		}
+	}
+
+	// 4. Call the Python Orchestrator service via gRPC
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	resp, err := h.client.ProcessWebhook(ctx, &pb.ProcessWebhookRequest{
+		Platform:   platformName,
+		Datasource: datasourceName,
+		RawPayload: string(body),
+		Headers:    headers,
 	})
-	//platformName := r.PathValue("platform")
-	//datasourceName := r.PathValue("datasource")
-	//
-	//
-	//
-	//
-	//// 4. Read the body for verification
-	//body, err := io.ReadAll(r.Body)
-	//if err != nil {
-	//	http.Error(w, "Failed to read request body", http.StatusInternalServerError)
-	//	return
-	//}
-	//
-	//if !verifySignature(body, secret, gitScmSignature) {
-	//	http.Error(w, "Invalid signature", http.StatusUnauthorized)
-	//	return
-	//}
-	//
-	//// 3. Prepare headers for the gRPC request
-	//headers := make(map[string]string)
-	//for k, v := range r.Header {
-	//	if len(v) > 0 {
-	//		headers[k] = v[0]
-	//	}
-	//}
-	//
-	//// 4. Call the Python Orchestrator service via gRPC
-	//ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	//defer cancel()
-	//
-	//resp, err := h.client.ProcessWebhook(ctx, &pb.ProcessWebhookRequest{
-	//	Platform:   platformName,
-	//	Datasource: datasourceName,
-	//	RawPayload: string(body),
-	//	Headers:    headers,
-	//})
-	//
-	//if err != nil {
-	//	http.Error(w, "Failed to forward to orchestrator", http.StatusInternalServerError)
-	//	return
-	//}
-	//
-	//// 5. Respond with the task ID from the backend
-	//w.Header().Set("Content-Type", "application/json")
-	//w.WriteHeader(http.StatusAccepted)
-	//io.WriteString(w, `{"task_id":"`+resp.GetTaskId()+`","message":"`+resp.GetMessage()+`"}`)
+
+	if err != nil {
+		http.Error(w, "Failed to forward to orchestrator", http.StatusInternalServerError)
+		return
+	}
+
+	// 5. Respond with the task ID from the backend
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusAccepted)
+	io.WriteString(w, `{"task_id":"`+resp.GetTaskId()+`","message":"`+resp.GetMessage()+`"}`)
 }
 
 func verifySignature(payload []byte, signatureHeader string, secret string) bool {
