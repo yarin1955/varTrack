@@ -1,0 +1,84 @@
+syntax = "proto3";
+
+package vartrack.v1;
+
+import "buf/validate/validate.proto";
+
+message VaultConfig {
+  // --- Identity ---
+  string name = 1 [(buf.validate.field).string.const = "vault"];
+
+  // --- Connection ---
+  string endpoint = 2 [(buf.validate.field).string.uri = true];
+
+  // Vault Enterprise namespace.
+  string namespace = 3;
+
+  // KV engine mount point (e.g. "secret", "kv").
+  string mount_point = 4 [(buf.validate.field).string.min_len = 1];
+
+  // KV engine version: 1 or 2.
+  int32 kv_version = 5 [(buf.validate.field).int32 = {in: [1, 2]}];
+
+  // --- Authentication ---
+  oneof auth {
+    option (buf.validate.oneof).required = true;
+
+    TokenAuth token_auth = 6;
+    AppRoleAuth app_role_auth = 7;
+    KubernetesAuth kubernetes_auth = 8;
+    UserPassAuth userpass_auth = 9;
+  }
+
+  // --- TLS ---
+  bool verify_ssl = 10;
+  // CA certificate content (PEM) for server verification.
+  optional string ssl_ca = 11;
+  // Client certificate content (PEM) for mutual TLS.
+  optional string ssl_cert = 12;
+  // Client private key content (PEM) for mutual TLS.
+  optional string ssl_key = 13;
+
+  // --- Reliability ---
+  int32 timeout = 14 [(buf.validate.field).int32.gte = 1];
+  int32 max_retries = 15 [(buf.validate.field).int32.gte = 0];
+}
+
+// --- Auth method messages ---
+
+message TokenAuth {
+  string token = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+message AppRoleAuth {
+  string role_id = 1 [(buf.validate.field).string.min_len = 1];
+  string secret_id = 2 [(buf.validate.field).string.min_len = 1];
+
+  enum SecretIDType {
+    SECRET_ID_TYPE_UNSPECIFIED = 0;
+    PLAIN = 1;
+    ENVIRONMENT = 2;
+  }
+  SecretIDType secret_id_type = 3 [(buf.validate.field).enum.defined_only = true];
+
+  // Mount path for the approle auth method (defaults to "approle").
+  string mount_path = 4;
+}
+
+message KubernetesAuth {
+  string role = 1 [(buf.validate.field).string.min_len = 1];
+
+  // Defaults to /var/run/secrets/kubernetes.io/serviceaccount/token.
+  string jwt_path = 2;
+
+  // Mount path for the kubernetes auth method (defaults to "kubernetes").
+  string mount_path = 3;
+}
+
+message UserPassAuth {
+  string username = 1 [(buf.validate.field).string.min_len = 1];
+  string password = 2 [(buf.validate.field).string.min_len = 1];
+
+  // Mount path for the userpass auth method (defaults to "userpass").
+  string mount_path = 3;
+}

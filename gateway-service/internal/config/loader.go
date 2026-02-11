@@ -1,16 +1,21 @@
 package config
 
 import (
+	"encoding/json"
 	"fmt"
 	pb_models "gateway-service/internal/gen/proto/go/vartrack/v1/models"
 	"gateway-service/internal/models"
+
 	"google.golang.org/protobuf/encoding/protojson"
 
 	"cuelang.org/go/cue"
 	"cuelang.org/go/cue/cuecontext"
 	"cuelang.org/go/cue/load"
 
+	// Register platform drivers
 	_ "gateway-service/internal/models/platforms"
+	// Register secret manager drivers
+	_ "gateway-service/internal/models/secret_managers"
 )
 
 func NewBundle(cuePath string) (*models.Bundle, error) {
@@ -22,12 +27,9 @@ func NewBundle(cuePath string) (*models.Bundle, error) {
 	return models.NewBundle(bundle), nil
 }
 
-
 func loadBundleFromCueFile(cuePath string) (*pb_models.Bundle, error) {
-	// Create load config
 	cfg := &load.Config{}
 
-	// Load CUE files
 	buildInstances := load.Instances([]string{cuePath}, cfg)
 	if len(buildInstances) == 0 {
 		return nil, fmt.Errorf("no CUE instances found")
@@ -37,33 +39,35 @@ func loadBundleFromCueFile(cuePath string) (*pb_models.Bundle, error) {
 		return nil, fmt.Errorf("failed to load CUE files: %w", buildInstances[0].Err)
 	}
 
-	// Get CUE context
 	ctx := cuecontext.New()
 
-	// Build the instance
 	value := ctx.BuildInstance(buildInstances[0])
 	if value.Err() != nil {
 		return nil, fmt.Errorf("failed to build CUE: %w", value.Err())
 	}
 
-	// Look up the bundle field
 	bundleValue := value.LookupPath(cue.ParsePath("bundle"))
 	if bundleValue.Err() != nil {
 		return nil, fmt.Errorf("bundle not found in CUE: %w", bundleValue.Err())
 	}
 
-	// Validate the bundle
 	if err := bundleValue.Validate(cue.Concrete(true)); err != nil {
 		return nil, fmt.Errorf("bundle validation failed: %w", err)
 	}
 
-	// Convert to JSON
 	jsonBytes, err := bundleValue.MarshalJSON()
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal bundle to JSON: %w", err)
 	}
 
-	// Unmarshal into protobuf
+	// Normalize SecretRef shorthand before protojson unmarshal.
+	// Converts: "token": "abc" → "token": {"value": "abc"}
+	// Converts: "token": {"path":"x","key":"y"} → "token": {"ref":{"path":"x","key":"y"}}
+	jsonBytes, err = normalizeSecretRefs(jsonBytes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to normalize secret refs: %w", err)
+	}
+
 	bundle := &pb_models.Bundle{}
 	if err := protojson.Unmarshal(jsonBytes, bundle); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal into protobuf: %w", err)
@@ -72,133 +76,59 @@ func loadBundleFromCueFile(cuePath string) (*pb_models.Bundle, error) {
 	return bundle, nil
 }
 
-// ... existing LoadFromCue and ValidateBundle functions ...
+// secretRefFields lists the platform field names that are SecretRef types.
+var secretRefFields = map[string]bool{
+	"token":    true,
+	"password": true,
+	"secret":   true,
+}
 
-//// gateway-service/internal/config/loader.go
-//package config
+// normalizeSecretRefs walks the JSON and converts SecretRef string shorthand to proto format.
+// For each platform in "platforms", it checks the SecretRef fields:
 //
-//import (
-//	"fmt"
-//	"log/slog"
-//
-//	models "gateway-service/internal/gen/proto/go/vartrack/v1/models"
-//
-//	"buf.build/go/protovalidate"
-//	"cuelang.org/go/cue/cuecontext"
-//	"cuelang.org/go/cue/load"
-//)
-//
-//func LoadFromCue(cueEntrypoint string) (*models.Bundle, error) {
-//	ctx := cuecontext.New()
-//
-//	slog.Debug("starting configuration load", "path", cueEntrypoint)
-//
-//	bis := load.Instances([]string{cueEntrypoint}, &load.Config{})
-//	if len(bis) == 0 {
-//		err := fmt.Errorf("no CUE instances found")
-//		slog.Error("failed to find CUE instances", "path", cueEntrypoint, "error", err)
-//		return nil, err
-//	}
-//
-//	value := ctx.BuildInstance(bis[0])
-//	if value.Err() != nil {
-//		err := fmt.Errorf("cue build error: %v", value.Err())
-//		slog.Error("failed to build CUE instance", "error", err)
-//		return nil, err
-//	}
-//
-//	var bundle models.Bundle
-//	err := value.Decode(&bundle)
-//	if err != nil {
-//		err := fmt.Errorf("failed to decode CUE: %v", err)
-//		slog.Error("failed to decode CUE into bundle", "error", err)
-//		return nil, err
-//	}
-//
-//	slog.Info("CUE decoded successfully, starting validation")
-//
-//	err = ValidateBundle(&bundle)
-//	if err != nil {
-//		slog.Error("bundle validation failed", "error", err)
-//		return nil, fmt.Errorf("bundle validation failed: %w", err)
-//	}
-//
-//	slog.Info("configuration bundle loaded and validated successfully")
-//	return &bundle, nil
-//}
-//
-//func ValidateBundle(bundle *models.Bundle) error {
-//	slog.Debug("initializing protovalidate validator")
-//
-//	// 1. Initialize the validator
-//	v, err := protovalidate.New()
-//	if err != nil {
-//		return fmt.Errorf("failed to initialize protovalidate: %w", err)
-//	}
-//
-//	// 2. Perform the validation
-//	// This recursively checks the Bundle and all nested messages (Rules, Platforms, etc.)
-//	if err := v.Validate(bundle); err != nil {
-//		slog.Error("validation failed", "error", err)
-//		return err
-//	}
-//
-//	slog.Debug("bundle validation passed")
-//	return nil
-//}
+//	"token": "abc"  →  "token": {"value": "abc"}
+//	"token": {"ref": {"path":"x", "key":"y"}}  →  unchanged (already proto format)
+func normalizeSecretRefs(data []byte) ([]byte, error) {
+	var bundle map[string]interface{}
+	if err := json.Unmarshal(data, &bundle); err != nil {
+		return nil, err
+	}
 
+	platforms, ok := bundle["platforms"].([]interface{})
+	if !ok {
+		return data, nil
+	}
 
-// type Loader struct {
-// 	cuePath string
-// 	bundle  *models.Bundle
-// 	mu      sync.RWMutex
-// }
+	for _, p := range platforms {
+		platformWrapper, ok := p.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		for _, platformConfig := range platformWrapper {
+			config, ok := platformConfig.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			normalizeFieldsInMap(config)
+		}
+	}
 
-// func NewLoader(cuePath string) *Loader {
-// 	return &Loader{
-// 		cuePath: cuePath,
-// 	}
-// }
+	return json.Marshal(bundle)
+}
 
-// func (l *Loader) GetPlatformConfig(platformName string) (*pb_models.Platform, error) {
-// 	l.mu.Lock()
-// 	if l.bundle == nil {
-// 		// --- RAW CUE LOADING LOGIC ---
-// 		ctx := cuecontext.New()
-// 		bis := load.Instances([]string{l.cuePath}, nil)
-// 		if len(bis) == 0 {
-// 			l.mu.Unlock()
-// 			return nil, fmt.Errorf("no CUE instances found at %s", l.cuePath)
-// 		}
+func normalizeFieldsInMap(config map[string]interface{}) {
+	for fieldName := range secretRefFields {
+		val, exists := config[fieldName]
+		if !exists {
+			continue
+		}
 
-// 		v := ctx.BuildInstance(bis[0])
-// 		if v.Err() != nil {
-// 			l.mu.Unlock()
-// 			return nil, fmt.Errorf("failed to build CUE instance: %v", v.Err())
-// 		}
-
-// 		// Decode directly into the raw Protobuf struct
-// 		pbBundle := &pb_models.Bundle{}
-// 		if err := v.Decode(pbBundle); err != nil {
-// 			l.mu.Unlock()
-// 			return nil, fmt.Errorf("failed to decode CUE into Protobuf: %v", err)
-// 		}
-
-// 		l.bundle = models.NewBundle(pbBundle)
-// 	}
-// 	l.mu.Unlock()
-
-// 	l.mu.RLock()
-// 	defer l.mu.RUnlock()
-
-// 	// Inline platform search
-
-// 	for _, p := range l.bundle.Platforms {
-// 		fmt.Printf("Checking platform in CUE. Has Github: %v\n", p.GetGithub() != nil)
-// 		if platformName == "github" && p.GetGithub() != nil {
-// 			return p, nil
-// 		}
-// 	}
-
-// 	return nil, fmt.Errorf("platform %s not found in CUE bundle", platformName)
-// }
+		// Only normalize plain strings → {"value": "..."}
+		// Objects like {"ref": {"path":"x","key":"y"}} pass through unchanged.
+		if str, ok := val.(string); ok {
+			config[fieldName] = map[string]interface{}{
+				"value": str,
+			}
+		}
+	}
+}

@@ -6,11 +6,10 @@ import "vartrack/v1/models/platform.proto";
 import "vartrack/v1/models/datasource.proto";
 import "vartrack/v1/models/rule.proto";
 import "vartrack/v1/models/schema_registry.proto";
-import "vartrack/v1/models/secrets_manager.proto";
+import "vartrack/v1/models/secret_manager.proto";
 import "vartrack/v1/models/monitoring.proto";
 import "buf/validate/validate.proto";
 
-// Bundle מגדיר את חבילת הקונפיגורציה המלאה של המערכת
 message Bundle {
   repeated Platform platforms = 1 [(buf.validate.field).repeated.min_items = 1];
 
@@ -20,7 +19,7 @@ message Bundle {
 
   SchemaRegistry schema_registry = 4 [(buf.validate.field).required = true];
 
-  repeated SecretsManager secrets_managers = 5;
+  repeated SecretManager secret_managers = 5;
 
   optional Monitoring monitoring = 6;
 

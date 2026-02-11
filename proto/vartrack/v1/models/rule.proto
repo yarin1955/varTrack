@@ -14,27 +14,33 @@ message RepositoryOverride {
 message Rule {
   string platform = 1 [(buf.validate.field).string.min_len = 1];
   string datasource = 2 [(buf.validate.field).string.min_len = 1];
-  optional string file_name = 3;
-  repeated string repositories = 4 [(buf.validate.field).repeated.min_items = 1];
-  repeated string exclude_repositories = 5;
 
-  bool env_as_branch = 6;
-  bool env_as_pr = 7;
-  bool env_as_tags = 8;
-  map<string, string> branch_map = 9;
-  map<string, string> file_path_map = 10;
-  string unique_key_name = 11; // FIXED: Removed default
-  map<string, string> variables_map = 12;
+  // Name of the secret manager for resolving external SecretRef fields.
+  // Must match a name in bundle.secret_managers. If empty, all SecretRef
+  // fields in the platform config must be inline strings.
+  optional string secret_manager = 3;
 
-  SyncMode sync_mode = 13;
-  repeated RepositoryOverride overrides = 14;
+  optional string file_name = 4;
+  repeated string repositories = 5 [(buf.validate.field).repeated.min_items = 1];
+  repeated string exclude_repositories = 6;
 
-  bool prune = 15;
-  bool prune_last = 16;
-  repeated string prune_protection = 17;
-  bool dry_run_prune = 18;
-  bool self_heal = 19; // FIXED: Removed default
-  ApplyStrategy apply_strategy = 20;
+  bool env_as_branch = 7;
+  bool env_as_pr = 8;
+  bool env_as_tags = 9;
+  map<string, string> branch_map = 10;
+  map<string, string> file_path_map = 11;
+  string unique_key_name = 12;
+  map<string, string> variables_map = 13;
+
+  SyncMode sync_mode = 14;
+  repeated RepositoryOverride overrides = 15;
+
+  bool prune = 16;
+  bool prune_last = 17;
+  repeated string prune_protection = 18;
+  bool dry_run_prune = 19;
+  bool self_heal = 20;
+  ApplyStrategy apply_strategy = 21;
 
   option (buf.validate.message).cel = {
     id: "rule.scan_target",

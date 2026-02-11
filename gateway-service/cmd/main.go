@@ -15,7 +15,7 @@ func main() {
 	ctx := context.Background()
 
 	// Load from CUE file
-	bundleService, err := config.NewBundle("./../../xx.cue")
+	bundleService, err := config.NewBundle("./../config.cue")
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 	}

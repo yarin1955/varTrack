@@ -16,9 +16,7 @@ import (
 	"time"
 )
 
-var (
-	_ utils.Platform = (*GitHub)(nil)
-)
+var _ utils.Platform = (*GitHub)(nil)
 
 func init() {
 	utils.Register("github", newPlatform)
@@ -27,38 +25,51 @@ func init() {
 type GitHub struct {
 	config *pb_gh.GitHub
 	client *http.Client
+
+	// Resolved secrets — plain text values.
+	token    string
+	password string
+	secret   string
 }
 
 func newPlatform() utils.Platform {
 	return &GitHub{}
 }
 
-func (g *GitHub) Open(ctx context.Context, config *pb_models.Platform) (utils.Platform, error) {
-	// 1. Extract the GitHub-specific data from the oneof "envelope"
+func (g *GitHub) Open(ctx context.Context, config *pb_models.Platform, resolver *utils.SecretRefResolver, managerName string) (utils.Platform, error) {
 	ghConfig := config.GetGithub()
 	if ghConfig == nil {
 		return nil, fmt.Errorf("github driver: configuration is missing or is not a GitHub type")
 	}
 
-	// 2. Store the config for use in other methods (Auth, GetRepos, etc.)
 	g.config = ghConfig
 
-	// 3. Configure the HTTP Transport
-	// We handle SSL verification based on the proto 'verify_ssl' field
+	// Resolve SecretRef fields — manager comes from the Rule
+	var err error
+	g.token, err = resolver.Resolve(ctx, ghConfig.GetToken(), managerName)
+	if err != nil {
+		return nil, fmt.Errorf("github: failed to resolve token: %w", err)
+	}
+	g.password, err = resolver.Resolve(ctx, ghConfig.GetPassword(), managerName)
+	if err != nil {
+		return nil, fmt.Errorf("github: failed to resolve password: %w", err)
+	}
+	g.secret, err = resolver.Resolve(ctx, ghConfig.GetSecret(), managerName)
+	if err != nil {
+		return nil, fmt.Errorf("github: failed to resolve secret: %w", err)
+	}
+
 	transport := &http.Transport{
 		TLSClientConfig: &tls.Config{
 			InsecureSkipVerify: !ghConfig.GetVerifySsl(),
 		},
 	}
 
-	// 4. Initialize the client
 	g.client = &http.Client{
 		Transport: transport,
-		// Convert int32 seconds from proto to time.Duration
-		Timeout: time.Duration(ghConfig.GetTimeout()) * time.Second,
+		Timeout:   time.Duration(ghConfig.GetTimeout()) * time.Second,
 	}
 
-	// Return the initialized instance (g) as the IPlatform interface
 	return g, nil
 }
 
@@ -75,7 +86,7 @@ func (g *GitHub) EventTypeHeader() string    { return g.config.EventTypeHeader }
 func (g *GitHub) GetGitScmSignature() string { return g.config.GitScmSignature }
 func (g *GitHub) IsPushEvent(et string) bool { return et == g.config.PushEventName }
 func (g *GitHub) IsPREvent(et string) bool   { return et == g.config.PrEventName }
-func (g *GitHub) GetSecret() string          { return g.config.GetSecret() }
+func (g *GitHub) GetSecret() string          { return g.secret }
 
 func (g *GitHub) Auth(ctx context.Context) error {
 	reqURL := fmt.Sprintf("%s/user", g.getBaseAPIURL())
@@ -171,7 +182,7 @@ func (g *GitHub) CreateWebhook(ctx context.Context, repoName, endpoint string) e
 		"config": map[string]interface{}{
 			"url":          targetURL,
 			"content_type": "json",
-			"secret":       g.config.GetSecret(),
+			"secret":       g.secret,
 			"insecure_ssl": insecureSSL,
 		},
 	}
@@ -199,10 +210,9 @@ func (g *GitHub) CreateWebhook(ctx context.Context, repoName, endpoint string) e
 	return nil
 }
 
-// Helpers
 func (g *GitHub) setAuthHeader(req *http.Request) {
-	if token := g.config.GetToken(); token != "" {
-		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token))
+	if g.token != "" {
+		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", g.token))
 	}
 }
 
@@ -241,8 +251,8 @@ func (g *GitHub) ConstructCloneURL(repo string) string {
 		return fmt.Sprintf("git@%s:%s.git", u.Host, fullRepo)
 	}
 	auth := ""
-	if token := g.config.GetToken(); token != "" {
-		auth = fmt.Sprintf("%s@", token)
+	if g.token != "" {
+		auth = fmt.Sprintf("%s@", g.token)
 	}
 	return fmt.Sprintf("%s://%s%s/%s.git", u.Scheme, auth, u.Host, fullRepo)
 }

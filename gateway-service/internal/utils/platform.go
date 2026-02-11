@@ -2,39 +2,22 @@ package utils
 
 import (
 	"context"
+	"fmt"
 	pb_models "gateway-service/internal/gen/proto/go/vartrack/v1/models"
 	"sync"
-	"fmt"
-
 )
 
 type Platform interface {
-	// EventTypeHeader returns the HTTP header key used by the provider for event types
 	EventTypeHeader() string
-
 	GetGitScmSignature() string
-
-	// IsPushEvent checks if the given event type is a push event
 	IsPushEvent(eventType string) bool
-
-	// IsPREvent checks if the given event type is a pull request event
 	IsPREvent(eventType string) bool
-
-	// ConstructCloneURL generates the git clone URL
 	ConstructCloneURL(repo string) string
-
-	// CreateWebhook registers a webhook on the platform
 	CreateWebhook(ctx context.Context, repoName string, endpoint string) error
-
-	// Auth validates credentials against the platform
 	Auth(ctx context.Context) error
-
-	Open(ctx context.Context, config *pb_models.Platform) (Platform, error)
+	Open(ctx context.Context, config *pb_models.Platform, resolver *SecretRefResolver, managerName string) (Platform, error)
 	Close(ctx context.Context) error
-
-	// GetRepos returns a list of repos matching the glob patterns
 	GetRepos(ctx context.Context, patterns []string) ([]string, error)
-
 	GetSecret() string
 }
 
@@ -57,7 +40,7 @@ func Register(name string, f PlatformFunc) {
 	platforms[name] = f
 }
 
-func Open(ctx context.Context, name string, config *pb_models.Platform) (Platform, error) {
+func Open(ctx context.Context, name string, config *pb_models.Platform, resolver *SecretRefResolver, managerName string) (Platform, error) {
 	platformsMu.RLock()
 	f, ok := platforms[name]
 	platformsMu.RUnlock()
@@ -67,45 +50,32 @@ func Open(ctx context.Context, name string, config *pb_models.Platform) (Platfor
 	}
 
 	driver := f()
-	return driver.Open(ctx, config)
+	return driver.Open(ctx, config, resolver, managerName)
 }
 
-type PlatformFactory struct {
-}
+type PlatformFactory struct{}
 
-// New creates a new database driver factory.
 func New() *PlatformFactory {
 	return &PlatformFactory{}
 }
 
-func (f *PlatformFactory) GetPlatform(ctx context.Context, config *pb_models.Platform) (Platform, error) {
+func (f *PlatformFactory) GetPlatform(ctx context.Context, config *pb_models.Platform, resolver *SecretRefResolver, managerName string) (Platform, error) {
 	if config == nil {
 		return nil, fmt.Errorf("platform config cannot be nil")
 	}
 
-	// Extract platform name from the config
 	platformName := GetPlatformName(config)
 	if platformName == "" {
 		return nil, fmt.Errorf("platform name must be specified")
 	}
 
-	driver, err := Open(ctx, platformName, config)
-	if err != nil {
-		return nil, err
-	}
-
-	return driver, nil
+	return Open(ctx, platformName, config, resolver, managerName)
 }
 
 func GetPlatformName(p *pb_models.Platform) string {
 	switch config := p.Config.(type) {
 	case *pb_models.Platform_Github:
 		return config.Github.Name
-	// Add other platforms when you implement them
-	// case *pb_models.Platform_Gitlab:
-	//     return config.Gitlab.Name
-	// case *pb_models.Platform_Bitbucket:
-	//     return config.Bitbucket.Name
 	default:
 		return ""
 	}

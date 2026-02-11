@@ -1,51 +1,83 @@
 package models
 
 import (
-	pb "gateway-service/internal/gen/proto/go/vartrack/v1/models"
 	"context"
 	"fmt"
+	pb "gateway-service/internal/gen/proto/go/vartrack/v1/models"
 	"gateway-service/internal/utils"
 	"sync"
 )
 
 type Bundle struct {
-	bundle          *pb.Bundle
-	platformFactory *utils.PlatformFactory
-	platforms       map[string]utils.Platform
-	mu              sync.RWMutex
+	bundle               *pb.Bundle
+	platformFactory      *utils.PlatformFactory
+	secretManagerFactory *utils.SecretManagerFactory
+	secretRefResolver    *utils.SecretRefResolver
+	platforms            map[string]utils.Platform
+	secretManagers       map[string]utils.SecretManager
+	mu                   sync.RWMutex
 }
 
 func NewBundle(pbBundle *pb.Bundle) *Bundle {
-	return &Bundle{
-		bundle:          pbBundle,
-		platformFactory: utils.New(),
-		platforms:       make(map[string]utils.Platform),
+	b := &Bundle{
+		bundle:               pbBundle,
+		platformFactory:      utils.New(),
+		secretManagerFactory: utils.NewSecretManagerFactory(),
+		platforms:            make(map[string]utils.Platform),
+		secretManagers:       make(map[string]utils.SecretManager),
 	}
+	b.secretRefResolver = utils.NewSecretRefResolver(b.GetSecretManager)
+	return b
 }
 
-func (s *Bundle) GetPlatform(ctx context.Context, name string) (utils.Platform, error) {
-	// Check if already initialized
+// ────────────────────────────────────────────
+// Rules
+// ────────────────────────────────────────────
+
+func (s *Bundle) FindRule(platformName, datasourceName string) *pb.Rule {
+	for _, r := range s.bundle.Rules {
+		if r.Platform == platformName && r.Datasource == datasourceName {
+			return r
+		}
+	}
+	return nil
+}
+
+func (s *Bundle) GetSecretManagerNameForRule(platformName, datasourceName string) string {
+	rule := s.FindRule(platformName, datasourceName)
+	if rule == nil {
+		return ""
+	}
+	return rule.GetSecretManager()
+}
+
+// ────────────────────────────────────────────
+// Platforms
+// ────────────────────────────────────────────
+
+func (s *Bundle) GetPlatform(ctx context.Context, name string, managerName string) (utils.Platform, error) {
+	cacheKey := name
+	if managerName != "" {
+		cacheKey = name + ":" + managerName
+	}
+
 	s.mu.RLock()
-	if plat, ok := s.platforms[name]; ok {
+	if plat, ok := s.platforms[cacheKey]; ok {
 		s.mu.RUnlock()
 		return plat, nil
 	}
 	s.mu.RUnlock()
 
-	// Not initialized, create it
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Double-check after acquiring write lock
-	if plat, ok := s.platforms[name]; ok {
+	if plat, ok := s.platforms[cacheKey]; ok {
 		return plat, nil
 	}
 
-	// Find the config in bundle
 	var config *pb.Platform
 	for _, p := range s.bundle.Platforms {
-		platformName := utils.GetPlatformName(p)
-		if platformName == name {
+		if utils.GetPlatformName(p) == name {
 			config = p
 			break
 		}
@@ -55,19 +87,64 @@ func (s *Bundle) GetPlatform(ctx context.Context, name string) (utils.Platform, 
 		return nil, fmt.Errorf("platform %q not found in bundle configuration", name)
 	}
 
-	// Create the platform instance
-	plat, err := s.platformFactory.GetPlatform(ctx, config)
+	plat, err := s.platformFactory.GetPlatform(ctx, config, s.secretRefResolver, managerName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create platform %q: %w", name, err)
 	}
 
-	// Cache it
-	s.platforms[name] = plat
-
+	s.platforms[cacheKey] = plat
 	return plat, nil
 }
 
-// Close closes all initialized platforms
+func (s *Bundle) GetPlatformForRule(ctx context.Context, platformName, datasourceName string) (utils.Platform, error) {
+	managerName := s.GetSecretManagerNameForRule(platformName, datasourceName)
+	return s.GetPlatform(ctx, platformName, managerName)
+}
+
+// ────────────────────────────────────────────
+// Secret Managers
+// ────────────────────────────────────────────
+
+func (s *Bundle) GetSecretManager(ctx context.Context, name string) (utils.SecretManager, error) {
+	s.mu.RLock()
+	if sm, ok := s.secretManagers[name]; ok {
+		s.mu.RUnlock()
+		return sm, nil
+	}
+	s.mu.RUnlock()
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if sm, ok := s.secretManagers[name]; ok {
+		return sm, nil
+	}
+
+	var config *pb.SecretManager
+	for _, sm := range s.bundle.SecretManagers {
+		if utils.GetSecretManagerName(sm) == name {
+			config = sm
+			break
+		}
+	}
+
+	if config == nil {
+		return nil, fmt.Errorf("secret manager %q not found in bundle configuration", name)
+	}
+
+	sm, err := s.secretManagerFactory.GetSecretManager(ctx, config)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create secret manager %q: %w", name, err)
+	}
+
+	s.secretManagers[name] = sm
+	return sm, nil
+}
+
+// ────────────────────────────────────────────
+// Lifecycle
+// ────────────────────────────────────────────
+
 func (s *Bundle) Close(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -78,26 +155,42 @@ func (s *Bundle) Close(ctx context.Context) error {
 			errs = append(errs, fmt.Errorf("failed to close platform %q: %w", name, err))
 		}
 	}
+	for name, sm := range s.secretManagers {
+		if err := sm.Close(ctx); err != nil {
+			errs = append(errs, fmt.Errorf("failed to close secret manager %q: %w", name, err))
+		}
+	}
 
 	if len(errs) > 0 {
-		return fmt.Errorf("errors closing platforms: %v", errs)
+		return fmt.Errorf("errors during close: %v", errs)
 	}
 	return nil
 }
 
-// ListConfiguredPlatforms returns names of all platforms in the bundle (without initializing them)
+// ────────────────────────────────────────────
+// Query helpers
+// ────────────────────────────────────────────
+
 func (s *Bundle) ListConfiguredPlatforms() []string {
 	names := make([]string, 0, len(s.bundle.Platforms))
 	for _, p := range s.bundle.Platforms {
-		platformName := utils.GetPlatformName(p)
-		if platformName != "" {
-			names = append(names, platformName)
+		if n := utils.GetPlatformName(p); n != "" {
+			names = append(names, n)
 		}
 	}
 	return names
 }
 
-// GetBundle returns the underlying bundle configuration
+func (s *Bundle) ListConfiguredSecretManagers() []string {
+	names := make([]string, 0, len(s.bundle.SecretManagers))
+	for _, sm := range s.bundle.SecretManagers {
+		if n := utils.GetSecretManagerName(sm); n != "" {
+			names = append(names, n)
+		}
+	}
+	return names
+}
+
 func (s *Bundle) GetBundle() *pb.Bundle {
 	return s.bundle
 }
