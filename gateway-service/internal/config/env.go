@@ -3,23 +3,38 @@ package config
 import (
 	"bufio"
 	"fmt"
-	"gateway-service/internal/utils/ports"
 	"log"
 	"os"
-	"strconv"
 	"strings"
 )
 
 // Env holds the shared environment variables consumed by all VarTrack services.
 // The canonical variable list lives in the project-root .env.example file.
-// Default ports are defined in the ports package (Jaeger-style constants).
+//
+// Service addresses follow the Jaeger convention: every service is configured
+// as a full address string so each deployment topology (Kubernetes, Docker
+// Compose, bare Linux) can set it independently.
+//
+//	K8s:
+//	  ORCHESTRATOR_ADDR=orchestrator.vartrack.svc.cluster.local:50051
+//	  AGENT_ADDR=agent.vartrack.svc.cluster.local:50052
+//	  GATEWAY_ADDR=:5657
+//
+//	Compose:
+//	  ORCHESTRATOR_ADDR=orchestrator:50051
+//	  AGENT_ADDR=agent:50052
+//	  GATEWAY_ADDR=:5657
+//
+//	Bare Linux:
+//	  ORCHESTRATOR_ADDR=10.0.1.5:50051
+//	  AGENT_ADDR=10.0.1.6:50052
+//	  GATEWAY_ADDR=0.0.0.0:5657
 type Env struct {
 	AppEnv           string // APP_ENV
 	LogLevel         string // LOG_LEVEL
-	SharedBaseURL    string // SHARED_BASE_URL
-	OrchestratorPort int    // ORCHESTRATOR_PORT
-	GatewayPort      int    // GATEWAY_PORT
-	AgentPort        int    // AGENT_PORT
+	OrchestratorAddr string // ORCHESTRATOR_ADDR — dial address for the orchestrator gRPC service
+	GatewayAddr      string // GATEWAY_ADDR — listen address for this gateway (e.g. ":5657", "0.0.0.0:5657")
+	AgentAddr        string // AGENT_ADDR — dial address for the agent gRPC service
 	VaultSecret      string // VAULT_SECRET
 	ConfigPath       string // CONFIG_PATH — path to the CUE bundle file
 	GRPCTlsCa        string // GRPC_TLS_CA — path to CA cert
@@ -27,17 +42,9 @@ type Env struct {
 	GRPCTlsKey       string // GRPC_TLS_KEY — path to client key (mTLS)
 }
 
-func (e *Env) OrchestratorAddr() string {
-	return ports.HostPort(e.SharedBaseURL, e.OrchestratorPort)
-}
-
-func (e *Env) GatewayAddr() string {
-	return ports.PortToHostPort(e.GatewayPort)
-}
-
-func (e *Env) AgentAddr() string {
-	return ports.HostPort(e.SharedBaseURL, e.AgentPort)
-}
+func (e *Env) GetOrchestratorAddr() string { return e.OrchestratorAddr }
+func (e *Env) GetGatewayAddr() string      { return e.GatewayAddr }
+func (e *Env) GetAgentAddr() string        { return e.AgentAddr }
 
 func (e *Env) IsProduction() bool {
 	return e.AppEnv == "production"
@@ -60,10 +67,9 @@ func LoadEnv() (*Env, error) {
 	env := &Env{
 		AppEnv:           envOr("APP_ENV", "test"),
 		LogLevel:         strings.ToUpper(envOr("LOG_LEVEL", "INFO")),
-		SharedBaseURL:    envOr("SHARED_BASE_URL", "localhost"),
-		OrchestratorPort: envIntOr("ORCHESTRATOR_PORT", ports.OrchestratorGRPC),
-		GatewayPort:      envIntOr("GATEWAY_PORT", ports.GatewayHTTP),
-		AgentPort:        envIntOr("AGENT_PORT", ports.AgentGRPC),
+		OrchestratorAddr: envOr("ORCHESTRATOR_ADDR", "localhost:50051"),
+		GatewayAddr:      envOr("GATEWAY_ADDR", ":5657"),
+		AgentAddr:        envOr("AGENT_ADDR", "localhost:50052"),
 		VaultSecret:      os.Getenv("VAULT_SECRET"),
 		ConfigPath:       envOr("CONFIG_PATH", "config.cue"),
 		GRPCTlsCa:        os.Getenv("GRPC_TLS_CA"),
@@ -154,16 +160,13 @@ func (e *Env) validate() error {
 	default:
 		return fmt.Errorf("LOG_LEVEL must be DEBUG|INFO|WARN|ERROR, got %q", e.LogLevel)
 	}
-	if e.IsProduction() && (e.SharedBaseURL == "localhost" || e.SharedBaseURL == "127.0.0.1") {
-		return fmt.Errorf("SHARED_BASE_URL cannot be localhost in production")
-	}
-	for name, port := range map[string]int{
-		"ORCHESTRATOR_PORT": e.OrchestratorPort,
-		"GATEWAY_PORT":      e.GatewayPort,
-		"AGENT_PORT":        e.AgentPort,
+	for name, addr := range map[string]string{
+		"ORCHESTRATOR_ADDR": e.OrchestratorAddr,
+		"GATEWAY_ADDR":      e.GatewayAddr,
+		"AGENT_ADDR":        e.AgentAddr,
 	} {
-		if port < 1 || port > 65535 {
-			return fmt.Errorf("%s out of range: %d", name, port)
+		if addr == "" {
+			return fmt.Errorf("%s must be set", name)
 		}
 	}
 	return nil
@@ -174,16 +177,4 @@ func envOr(key, fallback string) string {
 		return v
 	}
 	return fallback
-}
-
-func envIntOr(key string, fallback int) int {
-	v := os.Getenv(key)
-	if v == "" {
-		return fallback
-	}
-	n, err := strconv.Atoi(v)
-	if err != nil {
-		return fallback
-	}
-	return n
 }

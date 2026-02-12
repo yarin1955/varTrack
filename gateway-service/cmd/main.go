@@ -28,7 +28,7 @@ func main() {
 	}
 
 	log.Printf("Starting gateway-service env=%s log_level=%s orchestrator=%s",
-		env.AppEnv, env.LogLevel, env.OrchestratorAddr())
+		env.AppEnv, env.LogLevel, env.GetOrchestratorAddr())
 
 	// 2. Load bundle from CUE file (path from CONFIG_PATH env var, default: config.cue)
 	bundleService, err := config.NewBundle(env.ConfigPath)
@@ -44,7 +44,7 @@ func main() {
 	}
 
 	conn, err := grpc.NewClient(
-		env.OrchestratorAddr(),
+		env.GetOrchestratorAddr(),
 		grpc.WithTransportCredentials(transportCreds),
 	)
 	if err != nil {
@@ -56,7 +56,7 @@ func main() {
 
 	// 4. Wire and start
 	r := internal.NewRouter(bundleService, grpcClient)
-	internal.Run(env.GatewayAddr(), r)
+	internal.Run(env.GetGatewayAddr(), r)
 }
 
 // buildTransportCredentials returns TLS credentials for production

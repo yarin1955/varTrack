@@ -1,6 +1,8 @@
+// Package ports documents the default port assignments for VarTrack services.
+// These are not imported at runtime — each service reads its address from
+// the environment (e.g. GATEWAY_ADDR=:5657). The constants here serve as
+// a single source of truth for documentation and tooling.
 package ports
-
-import "strconv"
 
 const (
 	// GatewayHTTP is the default port for the gateway HTTP server (webhook ingestion, health checks).
@@ -18,13 +20,3 @@ const (
 	// MetricsHTTP is the default port for Prometheus metrics scraping.
 	MetricsHTTP = 9090
 )
-
-// PortToHostPort converts a port into a ":port" listen address.
-func PortToHostPort(port int) string {
-	return ":" + strconv.Itoa(port)
-}
-
-// HostPort combines a host and port into a "host:port" dial address.
-func HostPort(host string, port int) string {
-	return host + ":" + strconv.Itoa(port)
-}
