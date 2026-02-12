@@ -10,23 +10,27 @@ import (
 
 type Bundle struct {
 	bundle               *pb.Bundle
-	platformFactory      *utils.PlatformFactory
-	secretManagerFactory *utils.SecretManagerFactory
+	platformFactory      *PlatformFactory
+	secretManagerFactory *SecretManagerFactory
 	secretRefResolver    *utils.SecretRefResolver
-	platforms            map[string]utils.Platform
-	secretManagers       map[string]utils.SecretManager
+	platforms            map[string]Platform
+	secretManagers       map[string]SecretManager
 	mu                   sync.RWMutex
 }
 
 func NewBundle(pbBundle *pb.Bundle) *Bundle {
 	b := &Bundle{
 		bundle:               pbBundle,
-		platformFactory:      utils.New(),
-		secretManagerFactory: utils.NewSecretManagerFactory(),
-		platforms:            make(map[string]utils.Platform),
-		secretManagers:       make(map[string]utils.SecretManager),
+		platformFactory:      New(),
+		secretManagerFactory: NewSecretManagerFactory(),
+		platforms:            make(map[string]Platform),
+		secretManagers:       make(map[string]SecretManager),
 	}
-	b.secretRefResolver = utils.NewSecretRefResolver(b.GetSecretManager)
+	b.secretRefResolver = utils.NewSecretRefResolver(
+		func(ctx context.Context, name string) (utils.SecretFetcher, error) {
+			return b.GetSecretManager(ctx, name)
+		},
+	)
 	return b
 }
 
@@ -55,7 +59,7 @@ func (s *Bundle) GetSecretManagerNameForRule(platformName, datasourceName string
 // Platforms
 // ────────────────────────────────────────────
 
-func (s *Bundle) GetPlatform(ctx context.Context, name string, managerName string) (utils.Platform, error) {
+func (s *Bundle) GetPlatform(ctx context.Context, name string, managerName string) (Platform, error) {
 	cacheKey := name
 	if managerName != "" {
 		cacheKey = name + ":" + managerName
@@ -77,7 +81,7 @@ func (s *Bundle) GetPlatform(ctx context.Context, name string, managerName strin
 
 	var config *pb.Platform
 	for _, p := range s.bundle.Platforms {
-		if utils.GetPlatformName(p) == name {
+		if GetPlatformName(p) == name {
 			config = p
 			break
 		}
@@ -96,7 +100,7 @@ func (s *Bundle) GetPlatform(ctx context.Context, name string, managerName strin
 	return plat, nil
 }
 
-func (s *Bundle) GetPlatformForRule(ctx context.Context, platformName, datasourceName string) (utils.Platform, error) {
+func (s *Bundle) GetPlatformForRule(ctx context.Context, platformName, datasourceName string) (Platform, error) {
 	managerName := s.GetSecretManagerNameForRule(platformName, datasourceName)
 	return s.GetPlatform(ctx, platformName, managerName)
 }
@@ -105,7 +109,7 @@ func (s *Bundle) GetPlatformForRule(ctx context.Context, platformName, datasourc
 // Secret Managers
 // ────────────────────────────────────────────
 
-func (s *Bundle) GetSecretManager(ctx context.Context, name string) (utils.SecretManager, error) {
+func (s *Bundle) GetSecretManager(ctx context.Context, name string) (SecretManager, error) {
 	s.mu.RLock()
 	if sm, ok := s.secretManagers[name]; ok {
 		s.mu.RUnlock()
@@ -122,7 +126,7 @@ func (s *Bundle) GetSecretManager(ctx context.Context, name string) (utils.Secre
 
 	var config *pb.SecretManager
 	for _, sm := range s.bundle.SecretManagers {
-		if utils.GetSecretManagerName(sm) == name {
+		if GetSecretManagerName(sm) == name {
 			config = sm
 			break
 		}
@@ -174,7 +178,7 @@ func (s *Bundle) Close(ctx context.Context) error {
 func (s *Bundle) ListConfiguredPlatforms() []string {
 	names := make([]string, 0, len(s.bundle.Platforms))
 	for _, p := range s.bundle.Platforms {
-		if n := utils.GetPlatformName(p); n != "" {
+		if n := GetPlatformName(p); n != "" {
 			names = append(names, n)
 		}
 	}
@@ -184,7 +188,7 @@ func (s *Bundle) ListConfiguredPlatforms() []string {
 func (s *Bundle) ListConfiguredSecretManagers() []string {
 	names := make([]string, 0, len(s.bundle.SecretManagers))
 	for _, sm := range s.bundle.SecretManagers {
-		if n := utils.GetSecretManagerName(sm); n != "" {
+		if n := GetSecretManagerName(sm); n != "" {
 			names = append(names, n)
 		}
 	}
@@ -205,7 +209,7 @@ func (s *Bundle) FindRuleByDatasource(datasourceName string) *pb.Rule {
 }
 
 // GetPlatformForDatasource resolves the platform from a datasource name via the rule config.
-func (s *Bundle) GetPlatformForDatasource(ctx context.Context, datasourceName string) (utils.Platform, string, error) {
+func (s *Bundle) GetPlatformForDatasource(ctx context.Context, datasourceName string) (Platform, string, error) {
 	rule := s.FindRuleByDatasource(datasourceName)
 	if rule == nil {
 		return nil, "", fmt.Errorf("no rule found for datasource %q", datasourceName)
@@ -218,5 +222,3 @@ func (s *Bundle) GetPlatformForDatasource(ctx context.Context, datasourceName st
 	}
 	return plat, platformName, nil
 }
-
-

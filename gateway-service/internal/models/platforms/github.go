@@ -3,26 +3,27 @@ package platforms
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
 	"crypto/tls"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	pb_models "gateway-service/internal/gen/proto/go/vartrack/v1/models"
 	pb_gh "gateway-service/internal/gen/proto/go/vartrack/v1/models/platforms"
+	"gateway-service/internal/models"
 	"gateway-service/internal/utils"
 	"net/http"
 	"net/url"
 	"path"
 	"strings"
 	"time"
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/hex"
 )
 
-var _ utils.Platform = (*GitHub)(nil)
+var _ models.Platform = (*GitHub)(nil)
 
 func init() {
-	utils.Register("github", newPlatform)
+	models.Register("github", newPlatform)
 }
 
 type GitHub struct {
@@ -35,11 +36,11 @@ type GitHub struct {
 	secret   string
 }
 
-func newPlatform() utils.Platform {
+func newPlatform() models.Platform {
 	return &GitHub{}
 }
 
-func (g *GitHub) Open(ctx context.Context, config *pb_models.Platform, resolver *utils.SecretRefResolver, managerName string) (utils.Platform, error) {
+func (g *GitHub) Open(ctx context.Context, config *pb_models.Platform, resolver *utils.SecretRefResolver, managerName string) (models.Platform, error) {
 	ghConfig := config.GetGithub()
 	if ghConfig == nil {
 		return nil, fmt.Errorf("github driver: configuration is missing or is not a GitHub type")

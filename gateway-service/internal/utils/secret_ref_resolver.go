@@ -8,11 +8,15 @@ import (
 
 // SecretRefResolver resolves SecretRef values — either returning the inline
 // value or fetching from the secret manager provided at call time.
-type SecretRefResolver struct {
-	getManager func(ctx context.Context, name string) (SecretManager, error)
+type SecretFetcher interface {
+	GetSecret(ctx context.Context, path string, key string) (string, error)
 }
 
-func NewSecretRefResolver(getManager func(ctx context.Context, name string) (SecretManager, error)) *SecretRefResolver {
+type SecretRefResolver struct {
+	getManager func(ctx context.Context, name string) (SecretFetcher, error)
+}
+
+func NewSecretRefResolver(getManager func(ctx context.Context, name string) (SecretFetcher, error)) *SecretRefResolver {
 	return &SecretRefResolver{getManager: getManager}
 }
 

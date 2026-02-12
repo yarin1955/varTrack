@@ -1,9 +1,10 @@
-package utils
+package models
 
 import (
 	"context"
 	"fmt"
 	pb_models "gateway-service/internal/gen/proto/go/vartrack/v1/models"
+	"gateway-service/internal/utils"
 	"sync"
 )
 
@@ -15,7 +16,7 @@ type Platform interface {
 	VerifyWebhook(payload []byte, signatureHeader string) bool
 	ConstructCloneURL(repo string) string
 	Auth(ctx context.Context) error
-	Open(ctx context.Context, config *pb_models.Platform, resolver *SecretRefResolver, managerName string) (Platform, error)
+	Open(ctx context.Context, config *pb_models.Platform, resolver *utils.SecretRefResolver, managerName string) (Platform, error)
 	Close(ctx context.Context) error
 	GetRepos(ctx context.Context, patterns []string) ([]string, error)
 	GetSecret() string
@@ -40,7 +41,7 @@ func Register(name string, f PlatformFunc) {
 	platforms[name] = f
 }
 
-func Open(ctx context.Context, name string, config *pb_models.Platform, resolver *SecretRefResolver, managerName string) (Platform, error) {
+func Open(ctx context.Context, name string, config *pb_models.Platform, resolver *utils.SecretRefResolver, managerName string) (Platform, error) {
 	platformsMu.RLock()
 	f, ok := platforms[name]
 	platformsMu.RUnlock()
@@ -59,7 +60,7 @@ func New() *PlatformFactory {
 	return &PlatformFactory{}
 }
 
-func (f *PlatformFactory) GetPlatform(ctx context.Context, config *pb_models.Platform, resolver *SecretRefResolver, managerName string) (Platform, error) {
+func (f *PlatformFactory) GetPlatform(ctx context.Context, config *pb_models.Platform, resolver *utils.SecretRefResolver, managerName string) (Platform, error) {
 	if config == nil {
 		return nil, fmt.Errorf("platform config cannot be nil")
 	}

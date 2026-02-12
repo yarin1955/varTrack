@@ -7,8 +7,8 @@ import (
 	"fmt"
 	pb_models "gateway-service/internal/gen/proto/go/vartrack/v1/models"
 	pb_vault "gateway-service/internal/gen/proto/go/vartrack/v1/models/secret_managers"
+	"gateway-service/internal/models"
 
-	"gateway-service/internal/utils"
 	"net/http"
 	"os"
 	"time"
@@ -19,10 +19,10 @@ import (
 	authuserpass "github.com/hashicorp/vault/api/auth/userpass"
 )
 
-var _ utils.SecretManager = (*Vault)(nil)
+var _ models.SecretManager = (*Vault)(nil)
 
 func init() {
-	utils.RegisterSecretManager("vault", newVault)
+	models.RegisterSecretManager("vault", newVault)
 }
 
 type Vault struct {
@@ -30,11 +30,11 @@ type Vault struct {
 	client *vault.Client
 }
 
-func newVault() utils.SecretManager {
+func newVault() models.SecretManager {
 	return &Vault{}
 }
 
-func (v *Vault) Open(ctx context.Context, config *pb_models.SecretManager) (utils.SecretManager, error) {
+func (v *Vault) Open(ctx context.Context, config *pb_models.SecretManager) (models.SecretManager, error) {
 	vaultConfig := config.GetVault()
 	if vaultConfig == nil {
 		return nil, fmt.Errorf("vault driver: configuration is missing or not a Vault type")
