@@ -23,10 +23,8 @@ func NewWebhookHandler(bundleService *models.Bundle, client pb.OrchestratorClien
 	}
 }
 
+// Handle processes regular datasource webhooks (POST /webhooks/{datasource}).
 func (h *WebhookHandler) Handle(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
-	defer cancel()
-
 	datasourceName := r.PathValue("datasource")
 	if datasourceName == "" {
 		http.Error(w, "datasource name is required", http.StatusBadRequest)
@@ -35,7 +33,10 @@ func (h *WebhookHandler) Handle(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("Webhook received: datasource=%s", datasourceName)
 
-	// 1. Look up the platform from the rule (like ArgoCD looks up settings per-provider).
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	// Resolve platform from rule.
 	platform, platformName, err := h.bundleService.GetPlatformForDatasource(ctx, datasourceName)
 	if err != nil {
 		log.Printf("Failed to get platform for datasource %s: %v", datasourceName, err)
@@ -43,39 +44,13 @@ func (h *WebhookHandler) Handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 2. Verify the request actually originated from the expected SCM platform.
-	//    ArgoCD does this via a header-based switch (X-GitHub-Event, X-Gitlab-Event, etc.).
-	//    We do the same dynamically using the platform driver's EventTypeHeader().
-	eventTypeHeader := platform.EventTypeHeader()
-	eventType := r.Header.Get(eventTypeHeader)
-	if eventType == "" {
-		log.Printf("Platform mismatch for datasource=%s: expected header %q not present in request", datasourceName, eventTypeHeader)
-		http.Error(w, fmt.Sprintf("webhook source mismatch: expected platform %q (header %q missing)", platformName, eventTypeHeader), http.StatusBadRequest)
+	// Shared verification + event filtering.
+	body, eventType, ok := h.verifyWebhook(w, r, platform, platformName)
+	if !ok {
 		return
 	}
 
-	// 3. Read the body once — needed for both signature verification and forwarding.
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		log.Printf("Failed to read request body: %v", err)
-		http.Error(w, "Failed to read request body", http.StatusInternalServerError)
-		return
-	}
-
-	// 4. Verify webhook signature (like ArgoCD verifies HMAC/token per provider).
-	//    ArgoCD checks ErrHMACVerificationFailed per provider; we use the platform's
-	//    configured signature header and secret.
-	secret := platform.GetSecret()
-	if secret != "" {
-		signatureHeader := r.Header.Get(platform.GetGitScmSignature())
-		if !platform.VerifyWebhook(body, signatureHeader) {
-			log.Printf("Invalid webhook signature for datasource=%s platform=%s", datasourceName, platformName)
-			http.Error(w, "Invalid signature", http.StatusUnauthorized)
-			return
-		}
-	}
-
-	// 5. Optionally validate the event type is one we care about (push, PR, etc.)
+	// Datasource webhooks accept both push and PR events.
 	if !platform.IsPushEvent(eventType) && !platform.IsPREvent(eventType) {
 		log.Printf("Ignoring unhandled event type %q for datasource=%s", eventType, datasourceName)
 		w.WriteHeader(http.StatusOK)
@@ -83,9 +58,8 @@ func (h *WebhookHandler) Handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 6. Forward to orchestrator.
+	// Forward to orchestrator.
 	headers := flattenHeaders(r.Header)
-
 	resp, err := h.client.ProcessWebhook(ctx, &pb.ProcessWebhookRequest{
 		Platform:   platformName,
 		Datasource: datasourceName,
@@ -98,9 +72,117 @@ func (h *WebhookHandler) Handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	writeJSON(w, http.StatusAccepted, resp.GetTaskId(), resp.GetMessage())
+}
+
+// HandleSchemaRegistry processes schema registry webhooks (POST /webhooks/schema-registry).
+func (h *WebhookHandler) HandleSchemaRegistry(w http.ResponseWriter, r *http.Request) {
+	schemaRegistry := h.bundleService.GetSchemaRegistry()
+	if schemaRegistry == nil {
+		log.Printf("Schema registry webhook received but no schema_registry configured in bundle")
+		http.Error(w, "schema registry not configured", http.StatusNotFound)
+		return
+	}
+
+	platformName := schemaRegistry.GetPlatform()
+	repo := schemaRegistry.GetRepo()
+	branch := schemaRegistry.GetBranch()
+
+	log.Printf("Schema registry webhook received: platform=%s repo=%s branch=%s", platformName, repo, branch)
+
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	// Resolve platform from schema_registry config.
+	managerName := schemaRegistry.GetSecretManager()
+	platform, err := h.bundleService.GetPlatform(ctx, platformName, managerName)
+	if err != nil {
+		log.Printf("Failed to get platform %s for schema registry: %v", platformName, err)
+		http.Error(w, fmt.Sprintf("failed to resolve platform %q", platformName), http.StatusInternalServerError)
+		return
+	}
+
+	// Shared verification + event filtering.
+	body, eventType, ok := h.verifyWebhook(w, r, platform, platformName)
+	if !ok {
+		return
+	}
+
+	// Schema registry only cares about push events.
+	if !platform.IsPushEvent(eventType) {
+		log.Printf("Schema registry: ignoring non-push event %q", eventType)
+		w.WriteHeader(http.StatusOK)
+		io.WriteString(w, `{"message":"event ignored"}`)
+		return
+	}
+
+	// Forward to orchestrator via the dedicated schema RPC.
+	headers := flattenHeaders(r.Header)
+	resp, err := h.client.ProcessSchemaWebhook(ctx, &pb.ProcessSchemaWebhookRequest{
+		Platform:   platformName,
+		Repo:       repo,
+		Branch:     branch,
+		RawPayload: string(body),
+		Headers:    headers,
+	})
+	if err != nil {
+		log.Printf("Failed to forward schema webhook to orchestrator: %v", err)
+		http.Error(w, "failed to forward to orchestrator", http.StatusBadGateway)
+		return
+	}
+
+	writeJSON(w, http.StatusAccepted, resp.GetTaskId(), resp.GetMessage())
+}
+
+// ────────────────────────────────────────────
+// Shared helpers
+// ────────────────────────────────────────────
+
+// verifyWebhook performs platform header check, body read, and signature
+// verification. Returns the body bytes, event type, and true if all checks
+// passed. On failure it writes the HTTP error and returns false.
+func (h *WebhookHandler) verifyWebhook(
+	w http.ResponseWriter,
+	r *http.Request,
+	platform models.Platform,
+	platformName string,
+) (body []byte, eventType string, ok bool) {
+
+	// 1. Verify the request originated from the expected platform.
+	eventTypeHeader := platform.EventTypeHeader()
+	eventType = r.Header.Get(eventTypeHeader)
+	if eventType == "" {
+		log.Printf("Platform mismatch: expected header %q not present (platform=%s)", eventTypeHeader, platformName)
+		http.Error(w, fmt.Sprintf("webhook source mismatch: expected platform %q (header %q missing)", platformName, eventTypeHeader), http.StatusBadRequest)
+		return nil, "", false
+	}
+
+	// 2. Read the body once — needed for both signature verification and forwarding.
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		log.Printf("Failed to read request body: %v", err)
+		http.Error(w, "failed to read request body", http.StatusInternalServerError)
+		return nil, "", false
+	}
+
+	// 3. Verify webhook signature.
+	secret := platform.GetSecret()
+	if secret != "" {
+		signatureHeader := r.Header.Get(platform.GetGitScmSignature())
+		if !platform.VerifyWebhook(body, signatureHeader) {
+			log.Printf("Invalid webhook signature for platform=%s", platformName)
+			http.Error(w, "invalid signature", http.StatusUnauthorized)
+			return nil, "", false
+		}
+	}
+
+	return body, eventType, true
+}
+
+func writeJSON(w http.ResponseWriter, status int, taskID, message string) {
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusAccepted)
-	io.WriteString(w, `{"task_id":"`+resp.GetTaskId()+`","message":"`+resp.GetMessage()+`"}`)
+	w.WriteHeader(status)
+	io.WriteString(w, `{"task_id":"`+taskID+`","message":"`+message+`"}`)
 }
 
 func flattenHeaders(h http.Header) map[string]string {
@@ -112,4 +194,3 @@ func flattenHeaders(h http.Header) map[string]string {
 	}
 	return headers
 }
-

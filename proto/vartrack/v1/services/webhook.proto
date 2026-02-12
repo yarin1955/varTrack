@@ -9,7 +9,15 @@ import "buf/validate/validate.proto";
 service Orchestrator {
   // ProcessWebhook sends a raw webhook payload to the backend for processing.
   rpc ProcessWebhook(ProcessWebhookRequest) returns (ProcessWebhookResponse);
+
+  // ProcessSchemaWebhook handles webhook events from the schema registry repo.
+  // The orchestrator should re-pull the schema repo when this is called.
+  rpc ProcessSchemaWebhook(ProcessSchemaWebhookRequest) returns (ProcessSchemaWebhookResponse);
 }
+
+// ────────────────────────────────────────────
+// Datasource webhooks
+// ────────────────────────────────────────────
 
 message ProcessWebhookRequest {
   // The git platform name (e.g., "github")
@@ -27,6 +35,35 @@ message ProcessWebhookRequest {
 
 message ProcessWebhookResponse {
   // The ID of the task created in the backend (e.g., Celery task ID)
+  string task_id = 1;
+
+  // A descriptive message about the operation status
+  string message = 2;
+}
+
+// ────────────────────────────────────────────
+// Schema registry webhooks
+// ────────────────────────────────────────────
+
+message ProcessSchemaWebhookRequest {
+  // The git platform name (e.g., "github")
+  string platform = 1 [(buf.validate.field).string.min_len = 1];
+
+  // Full repository path (e.g., "my-org/schemas")
+  string repo = 2 [(buf.validate.field).string.min_len = 1];
+
+  // Branch that was pushed to (e.g., "main")
+  string branch = 3 [(buf.validate.field).string.min_len = 1];
+
+  // The unparsed body of the webhook
+  string raw_payload = 4 [(buf.validate.field).string.min_len = 1];
+
+  // HTTP headers from the webhook request
+  map<string, string> headers = 5;
+}
+
+message ProcessSchemaWebhookResponse {
+  // The ID of the task created in the backend
   string task_id = 1;
 
   // A descriptive message about the operation status

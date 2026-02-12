@@ -35,6 +35,15 @@ func NewBundle(pbBundle *pb.Bundle) *Bundle {
 }
 
 // ────────────────────────────────────────────
+// Schema Registry
+// ────────────────────────────────────────────
+
+// GetSchemaRegistry returns the schema registry config from the bundle, or nil if not configured.
+func (s *Bundle) GetSchemaRegistry() *pb.SchemaRegistry {
+	return s.bundle.GetSchemaRegistry()
+}
+
+// ────────────────────────────────────────────
 // Rules
 // ────────────────────────────────────────────
 

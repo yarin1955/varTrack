@@ -25,3 +25,4 @@ message Bundle {
 
   map<string, string> global_tags = 7;
 }
+
