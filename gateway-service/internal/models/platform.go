@@ -5,7 +5,6 @@ import (
 	"fmt"
 	pb_models "gateway-service/internal/gen/proto/go/vartrack/v1/models"
 	"gateway-service/internal/utils"
-	"sync"
 )
 
 type Platform interface {
@@ -22,56 +21,35 @@ type Platform interface {
 	GetSecret() string
 }
 
-type PlatformFunc func() Platform
+type PlatformConfig struct {
+	Platform    *pb_models.Platform
+	Resolver    *utils.SecretRefResolver
+	ManagerName string
+}
 
-var (
-	platformsMu sync.RWMutex
-	platforms   = make(map[string]PlatformFunc)
+var PlatformRegistry = utils.NewDriverRegistry[Platform, PlatformConfig](
+	"platform",
+	func(driver Platform, ctx context.Context, config PlatformConfig) (Platform, error) {
+		return driver.Open(ctx, config.Platform, config.Resolver, config.ManagerName)
+	},
 )
 
-func Register(name string, f PlatformFunc) {
-	platformsMu.Lock()
-	defer platformsMu.Unlock()
-	if f == nil {
-		panic("platform: Register driver is nil")
-	}
-	if _, dup := platforms[name]; dup {
-		panic(fmt.Sprintf("platform: Register called twice for driver %s", name))
-	}
-	platforms[name] = f
-}
-
-func Open(ctx context.Context, name string, config *pb_models.Platform, resolver *utils.SecretRefResolver, managerName string) (Platform, error) {
-	platformsMu.RLock()
-	f, ok := platforms[name]
-	platformsMu.RUnlock()
-
-	if !ok {
-		return nil, fmt.Errorf("platform: unknown driver %q", name)
-	}
-
-	driver := f()
-	return driver.Open(ctx, config, resolver, managerName)
-}
-
-type PlatformFactory struct{}
-
-func New() *PlatformFactory {
-	return &PlatformFactory{}
-}
-
-func (f *PlatformFactory) GetPlatform(ctx context.Context, config *pb_models.Platform, resolver *utils.SecretRefResolver, managerName string) (Platform, error) {
-	if config == nil {
-		return nil, fmt.Errorf("platform config cannot be nil")
-	}
-
-	platformName := GetPlatformName(config)
-	if platformName == "" {
-		return nil, fmt.Errorf("platform name must be specified")
-	}
-
-	return Open(ctx, platformName, config, resolver, managerName)
-}
+var PlatformFactory = utils.NewDriverFactory(
+	PlatformRegistry,
+	func(c PlatformConfig) string {
+		if c.Platform == nil {
+			return ""
+		}
+		return GetPlatformName(c.Platform)
+	},
+	func(c PlatformConfig) error {
+		if c.Platform == nil {
+			return fmt.Errorf("platform config cannot be nil")
+		}
+		return nil
+	},
+	"platform",
+)
 
 func GetPlatformName(p *pb_models.Platform) string {
 	switch config := p.Config.(type) {

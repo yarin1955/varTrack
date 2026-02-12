@@ -10,8 +10,8 @@ import (
 
 type Bundle struct {
 	bundle               *pb.Bundle
-	platformFactory      *PlatformFactory
-	secretManagerFactory *SecretManagerFactory
+	platformFactory      *utils.DriverFactory[Platform, PlatformConfig]
+	secretManagerFactory *utils.DriverFactory[SecretManager, *pb.SecretManager]
 	secretRefResolver    *utils.SecretRefResolver
 	platforms            map[string]Platform
 	secretManagers       map[string]SecretManager
@@ -21,8 +21,8 @@ type Bundle struct {
 func NewBundle(pbBundle *pb.Bundle) *Bundle {
 	b := &Bundle{
 		bundle:               pbBundle,
-		platformFactory:      New(),
-		secretManagerFactory: NewSecretManagerFactory(),
+		platformFactory:      PlatformFactory,
+		secretManagerFactory: SecretManagerFactory,
 		platforms:            make(map[string]Platform),
 		secretManagers:       make(map[string]SecretManager),
 	}
@@ -91,7 +91,11 @@ func (s *Bundle) GetPlatform(ctx context.Context, name string, managerName strin
 		return nil, fmt.Errorf("platform %q not found in bundle configuration", name)
 	}
 
-	plat, err := s.platformFactory.GetPlatform(ctx, config, s.secretRefResolver, managerName)
+	plat, err := s.platformFactory.Get(ctx, PlatformConfig{
+		Platform:    config,
+		Resolver:    s.secretRefResolver,
+		ManagerName: managerName,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create platform %q: %w", name, err)
 	}
@@ -136,7 +140,7 @@ func (s *Bundle) GetSecretManager(ctx context.Context, name string) (SecretManag
 		return nil, fmt.Errorf("secret manager %q not found in bundle configuration", name)
 	}
 
-	sm, err := s.secretManagerFactory.GetSecretManager(ctx, config)
+	sm, err := s.secretManagerFactory.Get(ctx, config)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create secret manager %q: %w", name, err)
 	}

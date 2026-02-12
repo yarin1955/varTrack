@@ -23,7 +23,7 @@ import (
 var _ models.Platform = (*GitHub)(nil)
 
 func init() {
-	models.Register("github", newPlatform)
+	models.PlatformRegistry.Register("github", newPlatform)
 }
 
 type GitHub struct {

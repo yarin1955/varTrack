@@ -22,7 +22,7 @@ import (
 var _ models.SecretManager = (*Vault)(nil)
 
 func init() {
-	models.RegisterSecretManager("vault", newVault)
+	models.SecretManagerRegistry.Register("vault", newVault)
 }
 
 type Vault struct {
