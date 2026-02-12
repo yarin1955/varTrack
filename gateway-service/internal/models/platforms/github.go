@@ -14,6 +14,9 @@ import (
 	"path"
 	"strings"
 	"time"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 )
 
 var _ utils.Platform = (*GitHub)(nil)
@@ -106,6 +109,19 @@ func (g *GitHub) Auth(ctx context.Context) error {
 		return fmt.Errorf("github auth failed: %s", resp.Status)
 	}
 	return nil
+}
+
+func (g *GitHub) VerifyWebhook(payload []byte, signatureHeader string) bool {
+	if g.secret == "" {
+		return true // no secret configured, skip verification
+	}
+	if !strings.HasPrefix(signatureHeader, "sha256=") {
+		return false
+	}
+	mac := hmac.New(sha256.New, []byte(g.secret))
+	mac.Write(payload)
+	expected := hex.EncodeToString(mac.Sum(nil))
+	return hmac.Equal([]byte(signatureHeader[7:]), []byte(expected))
 }
 
 func (g *GitHub) GetRepos(ctx context.Context, patterns []string) ([]string, error) {

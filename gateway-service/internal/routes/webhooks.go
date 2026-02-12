@@ -15,7 +15,7 @@ func WebhookRoutes(bundleService *models.Bundle, client pb.OrchestratorClient) h
     mux := http.NewServeMux()
 
 	// Matches only the root of this sub-router
-	mux.HandleFunc("POST /{platform}/{datasource}", h.Handle)
+	mux.HandleFunc("POST /{datasource}", h.Handle)
 
 	return mux
 

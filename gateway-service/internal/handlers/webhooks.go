@@ -2,15 +2,12 @@ package handlers
 
 import (
 	"context"
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/hex"
+	"fmt"
 	pb "gateway-service/internal/gen/proto/go/vartrack/v1/services"
 	"gateway-service/internal/models"
 	"io"
 	"log"
 	"net/http"
-	"strings"
 	"time"
 )
 
@@ -30,27 +27,34 @@ func (h *WebhookHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
-	platformName := r.PathValue("platform")
 	datasourceName := r.PathValue("datasource")
-
-	if platformName == "" {
-		http.Error(w, "platform name is required", http.StatusBadRequest)
+	if datasourceName == "" {
+		http.Error(w, "datasource name is required", http.StatusBadRequest)
 		return
 	}
 
-	log.Printf("Webhook received: platform=%s datasource=%s", platformName, datasourceName)
+	log.Printf("Webhook received: datasource=%s", datasourceName)
 
-	// Get platform using the rule to determine which secret manager to use
-	platform, err := h.bundleService.GetPlatformForRule(ctx, platformName, datasourceName)
+	// 1. Look up the platform from the rule (like ArgoCD looks up settings per-provider).
+	platform, platformName, err := h.bundleService.GetPlatformForDatasource(ctx, datasourceName)
 	if err != nil {
-		log.Printf("Failed to get platform %s: %v", platformName, err)
-		http.Error(w, err.Error(), http.StatusNotFound)
+		log.Printf("Failed to get platform for datasource %s: %v", datasourceName, err)
+		http.Error(w, fmt.Sprintf("no configuration found for datasource %q", datasourceName), http.StatusNotFound)
 		return
 	}
 
-	signatureHeader := r.Header.Get(platform.GetGitScmSignature())
-	secret := platform.GetSecret()
+	// 2. Verify the request actually originated from the expected SCM platform.
+	//    ArgoCD does this via a header-based switch (X-GitHub-Event, X-Gitlab-Event, etc.).
+	//    We do the same dynamically using the platform driver's EventTypeHeader().
+	eventTypeHeader := platform.EventTypeHeader()
+	eventType := r.Header.Get(eventTypeHeader)
+	if eventType == "" {
+		log.Printf("Platform mismatch for datasource=%s: expected header %q not present in request", datasourceName, eventTypeHeader)
+		http.Error(w, fmt.Sprintf("webhook source mismatch: expected platform %q (header %q missing)", platformName, eventTypeHeader), http.StatusBadRequest)
+		return
+	}
 
+	// 3. Read the body once — needed for both signature verification and forwarding.
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		log.Printf("Failed to read request body: %v", err)
@@ -58,18 +62,29 @@ func (h *WebhookHandler) Handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if secret != "" && !verifySignature(body, signatureHeader, secret) {
-		log.Printf("Invalid webhook signature for platform=%s", platformName)
-		http.Error(w, "Invalid signature", http.StatusUnauthorized)
+	// 4. Verify webhook signature (like ArgoCD verifies HMAC/token per provider).
+	//    ArgoCD checks ErrHMACVerificationFailed per provider; we use the platform's
+	//    configured signature header and secret.
+	secret := platform.GetSecret()
+	if secret != "" {
+		signatureHeader := r.Header.Get(platform.GetGitScmSignature())
+		if !platform.VerifyWebhook(body, signatureHeader) {
+			log.Printf("Invalid webhook signature for datasource=%s platform=%s", datasourceName, platformName)
+			http.Error(w, "Invalid signature", http.StatusUnauthorized)
+			return
+		}
+	}
+
+	// 5. Optionally validate the event type is one we care about (push, PR, etc.)
+	if !platform.IsPushEvent(eventType) && !platform.IsPREvent(eventType) {
+		log.Printf("Ignoring unhandled event type %q for datasource=%s", eventType, datasourceName)
+		w.WriteHeader(http.StatusOK)
+		io.WriteString(w, `{"message":"event ignored"}`)
 		return
 	}
 
-	headers := make(map[string]string)
-	for k, v := range r.Header {
-		if len(v) > 0 {
-			headers[k] = v[0]
-		}
-	}
+	// 6. Forward to orchestrator.
+	headers := flattenHeaders(r.Header)
 
 	resp, err := h.client.ProcessWebhook(ctx, &pb.ProcessWebhookRequest{
 		Platform:   platformName,
@@ -77,7 +92,6 @@ func (h *WebhookHandler) Handle(w http.ResponseWriter, r *http.Request) {
 		RawPayload: string(body),
 		Headers:    headers,
 	})
-
 	if err != nil {
 		log.Printf("Failed to forward to orchestrator: %v", err)
 		http.Error(w, "Failed to forward to orchestrator", http.StatusBadGateway)
@@ -89,16 +103,13 @@ func (h *WebhookHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	io.WriteString(w, `{"task_id":"`+resp.GetTaskId()+`","message":"`+resp.GetMessage()+`"}`)
 }
 
-func verifySignature(payload []byte, signatureHeader string, secret string) bool {
-	if !strings.HasPrefix(signatureHeader, "sha256=") {
-		return false
+func flattenHeaders(h http.Header) map[string]string {
+	headers := make(map[string]string, len(h))
+	for k, v := range h {
+		if len(v) > 0 {
+			headers[k] = v[0]
+		}
 	}
-
-	actualSignature := signatureHeader[7:]
-
-	mac := hmac.New(sha256.New, []byte(secret))
-	mac.Write(payload)
-	expectedSignature := hex.EncodeToString(mac.Sum(nil))
-
-	return hmac.Equal([]byte(actualSignature), []byte(expectedSignature))
+	return headers
 }
+

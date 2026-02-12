@@ -194,3 +194,29 @@ func (s *Bundle) ListConfiguredSecretManagers() []string {
 func (s *Bundle) GetBundle() *pb.Bundle {
 	return s.bundle
 }
+
+func (s *Bundle) FindRuleByDatasource(datasourceName string) *pb.Rule {
+	for _, r := range s.bundle.Rules {
+		if r.Datasource == datasourceName {
+			return r
+		}
+	}
+	return nil
+}
+
+// GetPlatformForDatasource resolves the platform from a datasource name via the rule config.
+func (s *Bundle) GetPlatformForDatasource(ctx context.Context, datasourceName string) (utils.Platform, string, error) {
+	rule := s.FindRuleByDatasource(datasourceName)
+	if rule == nil {
+		return nil, "", fmt.Errorf("no rule found for datasource %q", datasourceName)
+	}
+	platformName := rule.Platform
+	managerName := rule.GetSecretManager()
+	plat, err := s.GetPlatform(ctx, platformName, managerName)
+	if err != nil {
+		return nil, "", err
+	}
+	return plat, platformName, nil
+}
+
+

@@ -12,8 +12,8 @@ type Platform interface {
 	GetGitScmSignature() string
 	IsPushEvent(eventType string) bool
 	IsPREvent(eventType string) bool
+	VerifyWebhook(payload []byte, signatureHeader string) bool
 	ConstructCloneURL(repo string) string
-	CreateWebhook(ctx context.Context, repoName string, endpoint string) error
 	Auth(ctx context.Context) error
 	Open(ctx context.Context, config *pb_models.Platform, resolver *SecretRefResolver, managerName string) (Platform, error)
 	Close(ctx context.Context) error
