@@ -6,7 +6,9 @@ import "buf/validate/validate.proto";
 
 message VaultConfig {
   // --- Identity ---
-  string name = 1 [(buf.validate.field).string.const = "vault"];
+  // Optional tag to distinguish multiple instances of the same type.
+  // Resolved name: "vault-{tag}" if set, otherwise "vault".
+  optional string tag = 1;
 
   // --- Connection ---
   string endpoint = 2 [(buf.validate.field).string.uri = true];

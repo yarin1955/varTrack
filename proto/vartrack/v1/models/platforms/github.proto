@@ -7,7 +7,9 @@ import "buf/validate/validate.proto";
 
 message GitHub {
   // --- Identity ---
-  string tag = 1 [(buf.validate.field).string.min_len = 1];
+  // Optional tag to distinguish multiple instances of the same type.
+  // Resolved name: "github-{tag}" if set, otherwise "github".
+  optional string tag = 1;
   
   // --- Connection Settings ---
   string endpoint = 2 [(buf.validate.field).string.uri = true];

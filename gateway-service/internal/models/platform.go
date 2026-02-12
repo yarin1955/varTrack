@@ -51,10 +51,24 @@ var PlatformFactory = utils.NewDriverFactory(
 	"platform",
 )
 
+// GetPlatformName returns the resolved name for a platform.
+// If a tag is set, the name is "{type}-{tag}" (e.g. "github-dr").
+// Otherwise, it falls back to the type name (e.g. "github").
 func GetPlatformName(p *pb_models.Platform) string {
 	switch config := p.Config.(type) {
 	case *pb_models.Platform_Github:
-		return config.Github.Name
+		return utils.ResolveTagName("github", config.Github.GetTag())
+	default:
+		return ""
+	}
+}
+
+// GetPlatformDriverName returns the driver type name (e.g. "github")
+// used for registry lookups, independent of the tag.
+func GetPlatformDriverName(p *pb_models.Platform) string {
+	switch p.Config.(type) {
+	case *pb_models.Platform_Github:
+		return "github"
 	default:
 		return ""
 	}

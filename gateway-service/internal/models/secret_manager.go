@@ -37,10 +37,13 @@ var SecretManagerFactory = utils.NewDriverFactory(
 	"secret_manager",
 )
 
+// GetSecretManagerName returns the resolved name for a secret manager.
+// If a tag is set, the name is "{type}-{tag}" (e.g. "vault-prod").
+// Otherwise, it falls back to the type name (e.g. "vault").
 func GetSecretManagerName(sm *pb_models.SecretManager) string {
 	switch config := sm.Config.(type) {
 	case *pb_models.SecretManager_Vault:
-		return config.Vault.Name
+		return utils.ResolveTagName("vault", config.Vault.GetTag())
 	default:
 		return ""
 	}
