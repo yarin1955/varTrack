@@ -27,18 +27,14 @@ func CorrelationID(next http.Handler) http.Handler {
 			id = generateID()
 		}
 
-		// Store in context for downstream handlers and gRPC metadata.
 		ctx := context.WithValue(r.Context(), correlationIDKey, id)
-
-		// Echo back to the caller.
 		w.Header().Set(HeaderCorrelationID, id)
 
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 
-// GetCorrelationID extracts the correlation ID from a context. Returns ""
-// if none is present.
+// GetCorrelationID extracts the correlation ID from a context.
 func GetCorrelationID(ctx context.Context) string {
 	if v, ok := ctx.Value(correlationIDKey).(string); ok {
 		return v

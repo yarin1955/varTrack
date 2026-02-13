@@ -33,10 +33,10 @@ func WithLogger(l *slog.Logger) RecoveryOption {
 // logs the event with structured fields (method, path, correlation ID,
 // and optionally the stack trace), and returns a 500 to the caller.
 //
-// use a responseWriter wrapper to
-// track this, since net/http doesn't expose it directly. If headers
-// were already flushed, we can only log — the client connection is
-// likely broken anyway.
+// It uses a responseWriter wrapper to track whether headers were already
+// flushed. If headers were committed, we can only log — the client
+// connection is likely broken anyway. This is the same guard as Bytebase's
+// resp.Committed check in their Echo recovery middleware.
 func Recovery(opts ...RecoveryOption) func(http.Handler) http.Handler {
 	cfg := &recoveryConfig{
 		printStack: true,
@@ -70,8 +70,8 @@ func Recovery(opts ...RecoveryOption) func(http.Handler) http.Handler {
 
 					// Only write the error response if headers haven't been
 					// flushed yet — same guard as Bytebase's resp.Committed
-					// check. Writing after commit would cause a superfluous
-					// WriteHeader warning and possibly a broken response.
+					// check. Writing after commit causes superfluous
+					// WriteHeader warnings and possibly broken responses.
 					if !rw.committed {
 						http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 					}

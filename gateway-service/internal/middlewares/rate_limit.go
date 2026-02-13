@@ -13,10 +13,11 @@ import (
 	"golang.org/x/time/rate"
 )
 
-// pattern — a single struct that controls both global and per-key limits.
+// RateLimiterConfig controls both global and per-key limits.
+// Mirrors ArgoCD's AppControllerRateLimiterConfig which has BucketSize,
+// BucketQPS, FailureCoolDown, BaseDelay, MaxDelay, BackoffFactor.
 type RateLimiterConfig struct {
 	// Global token-bucket — protects the service as a whole.
-	// BucketQPS = math.MaxFloat64 effectively disables global limiting.
 	BucketQPS  float64
 	BucketSize int
 
@@ -32,9 +33,6 @@ type RateLimiterConfig struct {
 }
 
 // DefaultRateLimiterConfig returns production-ready defaults.
-//
-//	Global:  100 req/s, burst 200.
-//	Per-IP:  1 s base delay, 60 s max, 2 min cool-down, ×2 backoff.
 func DefaultRateLimiterConfig() RateLimiterConfig {
 	return RateLimiterConfig{
 		BucketQPS:       100,
@@ -63,7 +61,6 @@ type ipState struct {
 	blockedUtil time.Time
 }
 
-// NewRateLimiter creates a limiter from the given config.
 func NewRateLimiter(cfg RateLimiterConfig) *RateLimiter {
 	rl := &RateLimiter{
 		global:  rate.NewLimiter(rate.Limit(cfg.BucketQPS), cfg.BucketSize),
@@ -71,7 +68,6 @@ func NewRateLimiter(cfg RateLimiterConfig) *RateLimiter {
 		perIP:   make(map[string]*ipState),
 		closeCh: make(chan struct{}),
 	}
-
 	if cfg.CleanupInterval > 0 {
 		go rl.cleanup()
 	}
@@ -114,9 +110,9 @@ func (rl *RateLimiter) Close() {
 // perIPDelay returns how long the caller must wait before the next
 // request is allowed. Zero means the request may proceed immediately.
 //
-// The logic mirrors ArgoCD's ItemExponentialRateLimiterWithAutoReset:
-// if enough time has passed since the last request (≥ CoolDown), the
-// failure counter resets automatically.
+// Mirrors ArgoCD's ItemExponentialRateLimiterWithAutoReset: if enough
+// time has passed since the last request (≥ CoolDown), the failure
+// counter resets automatically.
 func (rl *RateLimiter) perIPDelay(ip string) time.Duration {
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
@@ -128,7 +124,7 @@ func (rl *RateLimiter) perIPDelay(ip string) time.Duration {
 		return 0
 	}
 
-	// Auto-reset after cool-down (same concept as ArgoCD's coolDown check).
+	// Auto-reset after cool-down.
 	if now.Sub(st.lastSeen) >= rl.cfg.CoolDown {
 		st.failures = 1
 		st.lastSeen = now
@@ -141,7 +137,6 @@ func (rl *RateLimiter) perIPDelay(ip string) time.Duration {
 		return st.blockedUtil.Sub(now)
 	}
 
-	// Record another hit.
 	st.failures++
 	st.lastSeen = now
 
@@ -155,7 +150,6 @@ func (rl *RateLimiter) perIPDelay(ip string) time.Duration {
 		delay = rl.cfg.MaxDelay
 	}
 
-	// Only enforce the delay once the per-IP rate exceeds the base.
 	if delay > rl.cfg.BaseDelay {
 		st.blockedUtil = now.Add(delay)
 		return delay
@@ -192,9 +186,11 @@ func extractIP(r *http.Request) string {
 	// Try X-Forwarded-For first (common behind load balancers).
 	// Take only the first entry — it's the original client IP.
 	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		ip := strings.TrimSpace(splitFirst(xff, ','))
-		if ip != "" {
-			return ip
+		if parts := strings.SplitN(xff, ",", 2); len(parts) > 0 {
+			ip := strings.TrimSpace(parts[0])
+			if ip != "" {
+				return ip
+			}
 		}
 	}
 
@@ -203,13 +199,4 @@ func extractIP(r *http.Request) string {
 		return r.RemoteAddr
 	}
 	return host
-}
-
-func splitFirst(s string, sep byte) string {
-	for i := 0; i < len(s); i++ {
-		if s[i] == sep {
-			return s[:i]
-		}
-	}
-	return s
 }

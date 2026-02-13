@@ -2,45 +2,74 @@ package internal
 
 import (
 	"context"
-	"log"
+	"log/slog"
+	"net"
 	"net/http"
 	"os"
-	"os/signal"
-	"syscall"
 	"time"
 )
 
-// Run starts the HTTP server and handles graceful shutdown
-func Run(addr string, handler http.Handler) {
-	srv := &http.Server{
-		Addr:         addr,
-		Handler:      handler,
-		ReadTimeout:  5 * time.Second,
-		WriteTimeout: 10 * time.Second,
-		IdleTimeout:  120 * time.Second,
+// Run starts the HTTP server and blocks until ctx is cancelled.
+//
+// Signal handling is done in cmd/main.go (which cancels ctx). This
+// mirrors ArgoCD's server.Run pattern where the select on stopCh
+// triggers the shutdown sequence.
+func Run(ctx context.Context, addr string, handler http.Handler) {
+	// Pre-flight port check — bind+release before starting. Inspired
+	// by Bytebase's checkPort() in backend/bin/server/cmd/root.go
+	// which catches port conflicts with a clear error message before
+	// the server is partially initialized.
+	if err := checkPort(addr); err != nil {
+		slog.Error("port not available", "addr", addr, "error", err)
+		os.Exit(1)
 	}
 
-	// Start server in a goroutine so it doesn't block the main thread
+	srv := &http.Server{
+		Addr:    addr,
+		Handler: handler,
+
+		// Timeouts prevent slowloris and resource-exhaustion attacks.
+		// A production HTTP server with zero timeouts is vulnerable.
+		// ArgoCD sets grpc.ConnectionTimeout(300s) on its gRPC server;
+		// we use values sized for a webhook gateway with small payloads.
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
+
+	// Graceful shutdown when context is cancelled. The 20-second drain
+	// timeout matches ArgoCD's shutdownCtx:
+	//   shutdownCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	go func() {
-		log.Printf("Server starting on %s", addr)
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("listen: %s\n", err)
+		<-ctx.Done()
+		slog.Info("shutting down server")
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		if err := srv.Shutdown(shutdownCtx); err != nil {
+			slog.Error("server shutdown error", "error", err)
 		}
 	}()
 
-	// Wait for interrupt signal
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	<-quit
-	log.Println("Shutting down server...")
-
-	// Graceful shutdown context
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	if err := srv.Shutdown(ctx); err != nil {
-		log.Fatal("Server forced to shutdown:", err)
+	slog.Info("server starting", "addr", addr)
+	if err := srv.ListenAndServe(); err != nil {
+		// Distinguish graceful shutdown from real errors — same as
+		// ArgoCD's checkServeErr which only logs ErrServerClosed as info.
+		if err == http.ErrServerClosed {
+			slog.Info("server stopped gracefully")
+		} else {
+			slog.Error("server error", "error", err)
+			os.Exit(1)
+		}
 	}
+}
 
-	log.Println("Server exiting")
+// checkPort verifies the address is available before starting the server.
+// Inspired by Bytebase's checkPort in backend/bin/server/cmd/root.go.
+func checkPort(addr string) error {
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return err
+	}
+	return ln.Close()
 }

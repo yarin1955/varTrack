@@ -9,7 +9,11 @@ import (
 	"gateway-service/internal/config"
 	pb "gateway-service/internal/gen/proto/go/vartrack/v1/services"
 	"log"
+	"log/slog"
 	"os"
+	"os/signal"
+	"runtime/debug"
+	"syscall"
 
 	_ "gateway-service/internal/monitoring"
 
@@ -19,7 +23,21 @@ import (
 )
 
 func main() {
-	ctx := context.Background()
+	// Top-level panic recovery — mirrors ArgoCD's server.Run() which
+	// defers recover(), logs the stack with debug.Stack(), and exits
+	// instead of crashing silently.
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("fatal panic in main",
+				"panic", fmt.Sprint(r),
+				"stack", string(debug.Stack()),
+			)
+			os.Exit(1)
+		}
+	}()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	// 1. Load shared environment variables
 	env, err := config.LoadEnv()
@@ -27,8 +45,11 @@ func main() {
 		log.Fatalf("Failed to load environment config: %v", err)
 	}
 
-	log.Printf("Starting gateway-service env=%s log_level=%s orchestrator=%s",
-		env.AppEnv, env.LogLevel, env.GetOrchestratorAddr())
+	slog.Info("starting gateway-service",
+		"env", env.AppEnv,
+		"log_level", env.LogLevel,
+		"orchestrator", env.GetOrchestratorAddr(),
+	)
 
 	// 2. Load bundle from CUE file (path from CONFIG_PATH env var, default: config.cue)
 	bundleService, err := config.NewBundle(env.ConfigPath)
@@ -54,16 +75,33 @@ func main() {
 
 	grpcClient := pb.NewOrchestratorClient(conn)
 
-	// 4. Wire and start
-	r := internal.NewRouter(bundleService, grpcClient)
-	internal.Run(env.GetGatewayAddr(), r)
+	// 4. Wire router — pass conn so health checks can inspect gRPC state.
+	r := internal.NewRouter(bundleService, grpcClient, conn)
+
+	// 5. Graceful shutdown — mirrors ArgoCD's signal handling:
+	//    signal.Notify(stopCh, os.Interrupt, syscall.SIGTERM)
+	//    then server.available.Store(false) → server.Shutdown()
+	stopCh := make(chan os.Signal, 1)
+	signal.Notify(stopCh, os.Interrupt, syscall.SIGTERM)
+
+	go func() {
+		sig := <-stopCh
+		slog.Info("received shutdown signal", "signal", sig.String())
+		// Mark health unavailable so K8s drains traffic before the
+		// listener closes — mirrors ArgoCD's shutdownFunc which calls
+		// server.available.Store(false) before closing servers.
+		r.SetUnavailable()
+		cancel()
+	}()
+
+	internal.Run(ctx, env.GetGatewayAddr(), r)
 }
 
 // buildTransportCredentials returns TLS credentials for production
 // and plaintext credentials for test. All config comes from env.
 func buildTransportCredentials(env *config.Env) (credentials.TransportCredentials, error) {
 	if !env.IsProduction() {
-		log.Println("gRPC transport: insecure (test mode)")
+		slog.Info("gRPC transport: insecure (test mode)")
 		return insecure.NewCredentials(), nil
 	}
 
@@ -91,6 +129,6 @@ func buildTransportCredentials(env *config.Env) (credentials.TransportCredential
 		tlsCfg.Certificates = []tls.Certificate{cert}
 	}
 
-	log.Println("gRPC transport: TLS (production mode)")
+	slog.Info("gRPC transport: TLS (production mode)")
 	return credentials.NewTLS(tlsCfg), nil
 }

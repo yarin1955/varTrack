@@ -9,10 +9,6 @@ import (
 // RequestLog logs completed HTTP requests with method, path, status, and
 // duration. Errors (status >= 500) are logged at Error level; client
 // errors (4xx) at Warn; successes are silent to avoid noise.
-//
-// Inspired by Bytebase's RequestLoggerWithConfig middleware which logs
-// method, URI, status, and error via slog. We use the same structured
-// fields but keep the implementation minimal — no external dependency.
 func RequestLog(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
