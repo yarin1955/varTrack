@@ -94,7 +94,29 @@ func main() {
 	// 4. Wire router
 	r := internal.NewRouter(bundleService, grpcClient, conn)
 
-	// 5. Graceful shutdown — ArgoCD's signal → available.Store(false) → Shutdown
+	// 5. Start admin server on a separate port.
+	//
+	// Mirrors ArgoCD's server.go which starts metricsServ on a dedicated
+	// port in a goroutine:
+	//   metricsServ := metrics.NewMetricsServer(server.MetricsHost, server.MetricsPort)
+	//   go func() { server.checkServeErr("metrics", metricsServ.Serve(listeners.Metrics)) }()
+	//
+	// And Jaeger's AdminServer (cmd/internal/flags/admin.go) which runs
+	// health, pprof, and version on "admin.http.host-port", separate
+	// from the main query/collector ports.
+	adminAddr := envOr("ADMIN_ADDR", ":9090")
+	adminSrv := internal.NewAdminServer(internal.AdminConfig{
+		Addr:        adminAddr,
+		EnablePprof: !env.IsProduction(),
+	}, r.HealthHandler())
+
+	go func() {
+		if err := adminSrv.Serve(); err != nil {
+			slog.Error("admin server error", "error", err)
+		}
+	}()
+
+	// 6. Graceful shutdown — ArgoCD's signal → available.Store(false) → Shutdown
 	stopCh := make(chan os.Signal, 1)
 	signal.Notify(stopCh, os.Interrupt, syscall.SIGTERM)
 
@@ -102,10 +124,19 @@ func main() {
 		sig := <-stopCh
 		slog.Info("received shutdown signal", "signal", sig.String())
 		r.SetUnavailable()
+
+		// Shutdown admin server alongside main — Jaeger's AdminServer.Close()
+		// calls server.Shutdown(context.Background()).
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer shutdownCancel()
+		if err := adminSrv.Shutdown(shutdownCtx); err != nil {
+			slog.Error("admin server shutdown error", "error", err)
+		}
+
 		cancel()
 	}()
 
-	// 6. Resolve inbound TLS config from environment.
+	// 7. Resolve inbound TLS config from environment.
 	//
 	// Three modes (mirroring ArgoCD's CreateServerTLSConfig):
 	//   a) GATEWAY_TLS_CERT + GATEWAY_TLS_KEY set → load from files
@@ -194,4 +225,11 @@ func buildTransportCredentials(env *config.Env) (credentials.TransportCredential
 
 	slog.Info("gRPC transport: TLS (production mode)")
 	return credentials.NewTLS(tlsCfg), nil
+}
+
+func envOr(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
 }

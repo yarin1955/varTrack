@@ -9,6 +9,14 @@ import (
 // RequestLog logs completed HTTP requests with method, path, status, and
 // duration. Errors (status >= 500) are logged at Error level; client
 // errors (4xx) at Warn; successes are silent to avoid noise.
+//
+// Now includes both correlation_id and request_id in every log entry.
+// The correlation_id traces across service hops; the request_id
+// pinpoints the specific gateway transaction — useful for debugging
+// rate limiting decisions and TLS handshake failures.
+//
+// ArgoCD's gRPC logging interceptor (util-grpc/logging.go) similarly
+// attaches structured per-call fields using logrus.Entry.WithField.
 func RequestLog(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
@@ -18,6 +26,7 @@ func RequestLog(next http.Handler) http.Handler {
 
 		duration := time.Since(start)
 		cid := GetCorrelationID(r.Context())
+		rid := GetRequestID(r.Context())
 
 		switch {
 		case sw.status >= 500:
@@ -27,6 +36,7 @@ func RequestLog(next http.Handler) http.Handler {
 				"status", sw.status,
 				"duration", duration,
 				"correlation_id", cid,
+				"request_id", rid,
 			)
 		case sw.status >= 400:
 			slog.Warn("request",
@@ -35,6 +45,7 @@ func RequestLog(next http.Handler) http.Handler {
 				"status", sw.status,
 				"duration", duration,
 				"correlation_id", cid,
+				"request_id", rid,
 			)
 			// 2xx/3xx: silent by default to avoid log noise on health probes.
 		}

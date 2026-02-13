@@ -2,6 +2,7 @@ package routes
 
 import (
 	"gateway-service/internal/handlers"
+	"gateway-service/internal/middlewares"
 	"gateway-service/internal/models"
 	"net/http"
 
@@ -11,8 +12,15 @@ import (
 // WebhookRoutes mounts all webhook endpoints under the /webhooks/ prefix.
 // Fixed paths (like schema-registry) are registered before the wildcard
 // so Go's ServeMux matches them first.
-func WebhookRoutes(bundleService *models.Bundle, client pb.OrchestratorClient) http.Handler {
-	h := handlers.NewWebhookHandler(bundleService, client)
+//
+// The circuit breaker is threaded from the router through to the handler
+// so that orchestrator failures trigger fast-fail behavior.
+func WebhookRoutes(
+	bundleService *models.Bundle,
+	client pb.OrchestratorClient,
+	breaker *middlewares.CircuitBreaker,
+) http.Handler {
+	h := handlers.NewWebhookHandler(bundleService, client, breaker)
 
 	mux := http.NewServeMux()
 
@@ -24,5 +32,3 @@ func WebhookRoutes(bundleService *models.Bundle, client pb.OrchestratorClient) h
 
 	return mux
 }
-
-//return middlewares.AuthMock(mux)

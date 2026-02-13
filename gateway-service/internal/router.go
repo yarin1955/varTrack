@@ -7,7 +7,6 @@ import (
 	"gateway-service/internal/models"
 	"gateway-service/internal/routes"
 	"net/http"
-	"net/http/pprof"
 )
 
 type Router struct {
@@ -16,8 +15,8 @@ type Router struct {
 	grpcClient    pb.OrchestratorClient
 	grpcConn      handlers.GRPCConnChecker
 	limiter       *middlewares.RateLimiter
+	breaker       *middlewares.CircuitBreaker
 	healthHandler *handlers.HealthHandler
-	enablePprof   bool
 	handler       http.Handler // final handler chain with middleware
 }
 
@@ -33,12 +32,10 @@ func WithRateLimiterConfig(cfg middlewares.RateLimiterConfig) RouterOption {
 	}
 }
 
-// WithPprof enables /debug/pprof/* endpoints. Inspired by Jaeger's
-// AdminServer.registerPprofHandlers() and Bytebase's registerPprof().
-// Should be disabled in production unless explicitly requested.
-func WithPprof(enable bool) RouterOption {
+// WithCircuitBreakerConfig overrides the default circuit breaker settings.
+func WithCircuitBreakerConfig(cfg middlewares.CircuitBreakerConfig) RouterOption {
 	return func(r *Router) {
-		r.enablePprof = enable
+		r.breaker = middlewares.NewCircuitBreaker(cfg)
 	}
 }
 
@@ -63,10 +60,20 @@ func NewRouter(
 	if r.limiter == nil {
 		r.limiter = middlewares.NewRateLimiter(middlewares.DefaultRateLimiterConfig())
 	}
+	if r.breaker == nil {
+		r.breaker = middlewares.NewCircuitBreaker(middlewares.DefaultCircuitBreakerConfig())
+	}
 
 	r.setupRoutes()
 	r.buildMiddlewareChain()
 	return r
+}
+
+// HealthHandler returns the shared health handler so the admin server can
+// use the same instance. This mirrors ArgoCD's server.go where the
+// metricsServ and main server share the same health state.
+func (r *Router) HealthHandler() *handlers.HealthHandler {
+	return r.healthHandler
 }
 
 // SetUnavailable marks the server as shutting down so readiness probes
@@ -77,7 +84,9 @@ func (r *Router) SetUnavailable() {
 }
 
 func (r *Router) setupRoutes() {
-	// Health routes — /health/liveness, /health/readiness
+	// Health routes on the public mux — kept for backward compatibility.
+	// The admin server also exposes these on a separate port.
+	//
 	// Registered directly on the mux so they bypass rate limiting,
 	// same pattern as Bytebase's /healthz which sits outside the
 	// middleware stack that includes auth and rate limits.
@@ -85,39 +94,31 @@ func (r *Router) setupRoutes() {
 		routes.HealthRoutes(r.healthHandler)))
 
 	// Webhook routes — /webhooks/{datasource}, /webhooks/schema-registry
-	// These go through rate limiting. Rate limiting is applied per-route
-	// group rather than globally, so health probes are never throttled.
+	// Rate limiting applied per-route group so health probes are never
+	// throttled. Circuit breaker is injected into the handler itself.
 	r.mux.Handle("/webhooks/", http.StripPrefix("/webhooks",
-		r.limiter.Middleware(routes.WebhookRoutes(r.bundleService, r.grpcClient)),
+		r.limiter.Middleware(routes.WebhookRoutes(r.bundleService, r.grpcClient, r.breaker)),
 	))
-
-	// Debug endpoints — mirrors Jaeger's AdminServer.registerPprofHandlers()
-	// and Bytebase's registerPprof(). Disabled by default; enable via
-	// WithPprof(true) for production debugging.
-	if r.enablePprof {
-		r.mux.HandleFunc("/debug/pprof/", pprof.Index)
-		r.mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
-		r.mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
-		r.mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
-		r.mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
-		r.mux.Handle("/debug/pprof/goroutine", pprof.Handler("goroutine"))
-		r.mux.Handle("/debug/pprof/heap", pprof.Handler("heap"))
-		r.mux.Handle("/debug/pprof/threadcreate", pprof.Handler("threadcreate"))
-		r.mux.Handle("/debug/pprof/block", pprof.Handler("block"))
-	}
 }
 
 func (r *Router) buildMiddlewareChain() {
 	// Outermost → innermost:
-	//   Recovery → SecurityHeaders → RequestLog → CorrelationID → mux
+	//   Recovery → SecurityHeaders → RequestLog → RequestID → CorrelationID → mux
 	//
 	// This mirrors Bytebase's configureEchoRouters ordering:
 	//   recoverMiddleware → securityHeadersMiddleware → requestLogger → routes
 	//
-	// CorrelationID is innermost so the ID is available to RequestLog
-	// for including correlation_id in log entries.
+	// RequestID (improvement #7) is placed before CorrelationID so both
+	// IDs are available in all downstream handlers and log entries.
+	// The key difference:
+	//   - CorrelationID: preserved across retries and service hops
+	//   - RequestID: unique per HTTP transaction at the gateway
+	//
+	// ArgoCD's gRPC logging interceptor (util-grpc/logging.go) attaches
+	// per-call structured fields in a similar innermost position.
 	var h http.Handler = r.mux
 	h = middlewares.CorrelationID(h)
+	h = middlewares.RequestID(h)
 	h = middlewares.RequestLog(h)
 	h = middlewares.SecurityHeaders(h)
 	h = middlewares.Recovery()(h)
