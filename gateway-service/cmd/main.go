@@ -14,18 +14,21 @@ import (
 	"os/signal"
 	"runtime/debug"
 	"syscall"
+	"time"
 
 	_ "gateway-service/internal/monitoring"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/keepalive"
 )
 
 func main() {
-	// Top-level panic recovery — mirrors ArgoCD's server.Run() which
-	// defers recover(), logs the stack with debug.Stack(), and exits
-	// instead of crashing silently.
+	// Top-level panic recovery — mirrors ArgoCD's server.Run():
+	//   defer func() {
+	//       if r := recover(); r != nil {
+	//           log.WithField("trace", string(debug.Stack())).Error("Recovered from panic: ", r)
 	defer func() {
 		if r := recover(); r != nil {
 			slog.Error("fatal panic in main",
@@ -39,7 +42,7 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// 1. Load shared environment variables
+	// 1. Load and validate environment variables
 	env, err := config.LoadEnv()
 	if err != nil {
 		log.Fatalf("Failed to load environment config: %v", err)
@@ -51,14 +54,14 @@ func main() {
 		"orchestrator", env.GetOrchestratorAddr(),
 	)
 
-	// 2. Load bundle from CUE file (path from CONFIG_PATH env var, default: config.cue)
+	// 2. Load bundle from CUE file
 	bundleService, err := config.NewBundle(env.ConfigPath)
 	if err != nil {
 		log.Fatalf("Failed to load config from %s: %v", env.ConfigPath, err)
 	}
 	defer bundleService.Close(ctx)
 
-	// 3. Connect to orchestrator — TLS in production, plaintext in test
+	// 3. Connect to orchestrator with resilience
 	transportCreds, err := buildTransportCredentials(env)
 	if err != nil {
 		log.Fatalf("Failed to build transport credentials: %v", err)
@@ -67,6 +70,19 @@ func main() {
 	conn, err := grpc.NewClient(
 		env.GetOrchestratorAddr(),
 		grpc.WithTransportCredentials(transportCreds),
+
+		// Keepalive — ArgoCD common.GetGRPCKeepAliveTime() returns
+		// 2× enforcementMinimum (10s) = 20s. Prevents idle connections
+		// from being silently dropped by intermediate LBs/firewalls.
+		grpc.WithKeepaliveParams(keepalive.ClientParameters{
+			Time:                20 * time.Second,
+			Timeout:             5 * time.Second,
+			PermitWithoutStream: true,
+		}),
+
+		// User-agent — ArgoCD apiclient.go line 541:
+		//   dialOpts = append(dialOpts, grpc.WithUserAgent(c.UserAgent))
+		grpc.WithUserAgent("gateway-service"),
 	)
 	if err != nil {
 		log.Fatalf("Failed to connect to orchestrator: %v", err)
@@ -75,30 +91,61 @@ func main() {
 
 	grpcClient := pb.NewOrchestratorClient(conn)
 
-	// 4. Wire router — pass conn so health checks can inspect gRPC state.
+	// 4. Wire router
 	r := internal.NewRouter(bundleService, grpcClient, conn)
 
-	// 5. Graceful shutdown — mirrors ArgoCD's signal handling:
-	//    signal.Notify(stopCh, os.Interrupt, syscall.SIGTERM)
-	//    then server.available.Store(false) → server.Shutdown()
+	// 5. Graceful shutdown — ArgoCD's signal → available.Store(false) → Shutdown
 	stopCh := make(chan os.Signal, 1)
 	signal.Notify(stopCh, os.Interrupt, syscall.SIGTERM)
 
 	go func() {
 		sig := <-stopCh
 		slog.Info("received shutdown signal", "signal", sig.String())
-		// Mark health unavailable so K8s drains traffic before the
-		// listener closes — mirrors ArgoCD's shutdownFunc which calls
-		// server.available.Store(false) before closing servers.
 		r.SetUnavailable()
 		cancel()
 	}()
 
-	internal.Run(ctx, env.GetGatewayAddr(), r)
+	// 6. Resolve inbound TLS config from environment.
+	//
+	// Three modes (mirroring ArgoCD's CreateServerTLSConfig):
+	//   a) GATEWAY_TLS_CERT + GATEWAY_TLS_KEY set → load from files
+	//   b) Neither set + test mode → self-signed cert (ArgoCD's fallback)
+	//   c) Neither set + production → plaintext (behind Ingress/LB)
+	tlsCfg := resolveInboundTLS(env)
+
+	internal.Run(ctx, env.GetGatewayAddr(), r, tlsCfg)
 }
 
-// buildTransportCredentials returns TLS credentials for production
-// and plaintext credentials for test. All config comes from env.
+// resolveInboundTLS builds the inbound TLS config based on environment.
+func resolveInboundTLS(env *config.Env) *internal.TLSConfig {
+	cert := os.Getenv("GATEWAY_TLS_CERT")
+	key := os.Getenv("GATEWAY_TLS_KEY")
+
+	if cert != "" && key != "" {
+		slog.Info("inbound TLS: loading certificate from files",
+			"cert", cert, "key", key)
+		return &internal.TLSConfig{CertFile: cert, KeyFile: key}
+	}
+
+	// In non-production, generate a self-signed cert so local dev always
+	// uses HTTPS. Mirrors ArgoCD's CreateServerTLSConfig which logs:
+	//   "Generating self-signed TLS certificate for this session"
+	if !env.IsProduction() {
+		slog.Info("inbound TLS: self-signed cert for local dev (non-production)")
+		return &internal.TLSConfig{SelfSignedIfMissing: true}
+	}
+
+	// Production without explicit certs: plaintext behind Ingress/LB.
+	slog.Info("inbound TLS: disabled (expects TLS termination upstream)")
+	return nil
+}
+
+// buildTransportCredentials returns TLS credentials for the outbound gRPC
+// connection to the orchestrator.
+//
+// Uses ArgoCD's tls util BestEffortSystemCertPool pattern: when no custom
+// CA is specified, the system cert pool is used (with a fallback to an
+// empty pool if system certs can't be loaded).
 func buildTransportCredentials(env *config.Env) (credentials.TransportCredentials, error) {
 	if !env.IsProduction() {
 		slog.Info("gRPC transport: insecure (test mode)")
@@ -107,8 +154,8 @@ func buildTransportCredentials(env *config.Env) (credentials.TransportCredential
 
 	tlsCfg := &tls.Config{}
 
-	// Custom CA — if not set, Go uses the system cert pool automatically
 	if env.GRPCTlsCa != "" {
+		// Custom CA provided — load it into a fresh pool.
 		caPEM, err := os.ReadFile(env.GRPCTlsCa)
 		if err != nil {
 			return nil, fmt.Errorf("failed to read CA cert %s: %w", env.GRPCTlsCa, err)
@@ -118,9 +165,25 @@ func buildTransportCredentials(env *config.Env) (credentials.TransportCredential
 			return nil, fmt.Errorf("failed to parse CA certificate from %s", env.GRPCTlsCa)
 		}
 		tlsCfg.RootCAs = pool
+	} else {
+		// No custom CA — use system cert pool. Mirrors ArgoCD's
+		// BestEffortSystemCertPool:
+		//   func BestEffortSystemCertPool() *x509.CertPool {
+		//       rootCAs, _ := x509.SystemCertPool()
+		//       if rootCAs == nil { return x509.NewCertPool() }
+		//       return rootCAs
+		//   }
+		pool, _ := x509.SystemCertPool()
+		if pool == nil {
+			pool = x509.NewCertPool()
+		}
+		tlsCfg.RootCAs = pool
 	}
 
-	// Client certificate for mTLS — both must be present
+	// Client cert for mTLS — both must be present.
+	// ArgoCD apiclient.go line ~235:
+	//   "ClientCertificateData and ClientCertificateKeyData must always
+	//    be specified together"
 	if env.GRPCTlsCert != "" && env.GRPCTlsKey != "" {
 		cert, err := tls.LoadX509KeyPair(env.GRPCTlsCert, env.GRPCTlsKey)
 		if err != nil {

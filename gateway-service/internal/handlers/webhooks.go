@@ -16,10 +16,8 @@ import (
 	"google.golang.org/grpc/metadata"
 )
 
-// maxWebhookBodySize limits the request body to 10 MB. GitHub's maximum
-// webhook payload is 25 MB; 10 MB gives comfortable headroom while
-// protecting against OOM from oversized payloads.
-const maxWebhookBodySize = 10 << 20 // 10 MB
+// maxWebhookBodySize limits the request body to 10 MB.
+const maxWebhookBodySize = 10 << 20
 
 type WebhookHandler struct {
 	bundleService *models.Bundle
@@ -27,17 +25,18 @@ type WebhookHandler struct {
 }
 
 func NewWebhookHandler(bundleService *models.Bundle, client pb.OrchestratorClient) *WebhookHandler {
-	return &WebhookHandler{
-		bundleService: bundleService,
-		client:        client,
-	}
+	return &WebhookHandler{bundleService: bundleService, client: client}
 }
 
 // Handle processes regular datasource webhooks (POST /webhooks/{datasource}).
 func (h *WebhookHandler) Handle(w http.ResponseWriter, r *http.Request) {
-	// Content-Type enforcement — inspired by ArgoCD's enforceContentTypes
-	// which rejects non-whitelisted Content-Types on mutation requests
-	// to mitigate CSRF. Webhooks are always JSON.
+	// Content-Type enforcement — ArgoCD server.go enforceContentTypes():
+	//   if r.Method == http.MethodGet || allowedTypes[strings.ToLower(r.Header.Get("Content-Type"))] {
+	//       handler.ServeHTTP(w, r)
+	//   } else {
+	//       http.Error(w, "Invalid content type", http.StatusUnsupportedMediaType)
+	//   }
+	// Webhooks are always POST with JSON, so we skip the GET bypass.
 	if !isJSONContentType(r) {
 		http.Error(w, "Content-Type must be application/json", http.StatusUnsupportedMediaType)
 		return
@@ -50,16 +49,12 @@ func (h *WebhookHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cid := middlewares.GetCorrelationID(r.Context())
-	slog.Info("webhook received",
-		"datasource", datasourceName,
-		"correlation_id", cid,
-	)
+	slog.Info("webhook received", "datasource", datasourceName, "correlation_id", cid)
 
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 	ctx = injectCorrelationID(ctx, cid)
 
-	// Resolve platform from rule.
 	platform, platformName, err := h.bundleService.GetPlatformForDatasource(ctx, datasourceName)
 	if err != nil {
 		slog.Warn("no platform for datasource",
@@ -68,13 +63,11 @@ func (h *WebhookHandler) Handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Shared verification + event filtering.
 	body, eventType, ok := h.verifyWebhook(w, r, platform, platformName, cid)
 	if !ok {
 		return
 	}
 
-	// Datasource webhooks accept both push and PR events.
 	if !platform.IsPushEvent(eventType) && !platform.IsPREvent(eventType) {
 		slog.Info("ignoring unhandled event type",
 			"event_type", eventType, "datasource", datasourceName, "correlation_id", cid)
@@ -83,13 +76,10 @@ func (h *WebhookHandler) Handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Forward to orchestrator.
 	headers := flattenHeaders(r.Header)
 	resp, err := h.client.ProcessWebhook(ctx, &pb.ProcessWebhookRequest{
-		Platform:   platformName,
-		Datasource: datasourceName,
-		RawPayload: string(body),
-		Headers:    headers,
+		Platform: platformName, Datasource: datasourceName,
+		RawPayload: string(body), Headers: headers,
 	})
 	if err != nil {
 		slog.Error("failed to forward to orchestrator",
@@ -97,7 +87,6 @@ func (h *WebhookHandler) Handle(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Failed to forward to orchestrator", http.StatusBadGateway)
 		return
 	}
-
 	writeJSON(w, http.StatusAccepted, resp.GetTaskId(), resp.GetMessage())
 }
 
@@ -118,7 +107,6 @@ func (h *WebhookHandler) HandleSchemaRegistry(w http.ResponseWriter, r *http.Req
 	platformName := schemaRegistry.GetPlatform()
 	repo := schemaRegistry.GetRepo()
 	branch := schemaRegistry.GetBranch()
-
 	cid := middlewares.GetCorrelationID(r.Context())
 	slog.Info("schema registry webhook received",
 		"platform", platformName, "repo", repo, "branch", branch, "correlation_id", cid)
@@ -127,7 +115,6 @@ func (h *WebhookHandler) HandleSchemaRegistry(w http.ResponseWriter, r *http.Req
 	defer cancel()
 	ctx = injectCorrelationID(ctx, cid)
 
-	// Resolve platform from schema_registry config.
 	managerName := schemaRegistry.GetSecretManager()
 	platform, err := h.bundleService.GetPlatform(ctx, platformName, managerName)
 	if err != nil {
@@ -137,13 +124,11 @@ func (h *WebhookHandler) HandleSchemaRegistry(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	// Shared verification + event filtering.
 	body, eventType, ok := h.verifyWebhook(w, r, platform, platformName, cid)
 	if !ok {
 		return
 	}
 
-	// Schema registry only cares about push events.
 	if !platform.IsPushEvent(eventType) {
 		slog.Info("schema registry: ignoring non-push event",
 			"event_type", eventType, "correlation_id", cid)
@@ -152,14 +137,10 @@ func (h *WebhookHandler) HandleSchemaRegistry(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	// Forward to orchestrator via the dedicated schema RPC.
 	headers := flattenHeaders(r.Header)
 	resp, err := h.client.ProcessSchemaWebhook(ctx, &pb.ProcessSchemaWebhookRequest{
-		Platform:   platformName,
-		Repo:       repo,
-		Branch:     branch,
-		RawPayload: string(body),
-		Headers:    headers,
+		Platform: platformName, Repo: repo, Branch: branch,
+		RawPayload: string(body), Headers: headers,
 	})
 	if err != nil {
 		slog.Error("failed to forward schema webhook to orchestrator",
@@ -167,49 +148,45 @@ func (h *WebhookHandler) HandleSchemaRegistry(w http.ResponseWriter, r *http.Req
 		http.Error(w, "failed to forward to orchestrator", http.StatusBadGateway)
 		return
 	}
-
 	writeJSON(w, http.StatusAccepted, resp.GetTaskId(), resp.GetMessage())
 }
 
-// ────────────────────────────────────────────
-// Shared helpers
-// ────────────────────────────────────────────
+// ── Shared helpers ──────────────────────────────────────────────────────
 
-// verifyWebhook performs platform header check, body read with size cap,
-// and signature verification. Returns the body bytes, event type, and
-// true if all checks passed. On failure it writes the HTTP error and
-// returns false.
+// verifyWebhook performs:
+//  1. Platform header check
+//  2. Size-capped body read (MaxBytesReader)
+//  3. Signature verification
+//  4. JSON well-formedness validation (json.Valid — O(n), zero alloc)
+//
+// Returns the body, event type, and true if all checks passed.
 func (h *WebhookHandler) verifyWebhook(
-	w http.ResponseWriter,
-	r *http.Request,
-	platform models.Platform,
-	platformName string,
-	correlationID string,
+	w http.ResponseWriter, r *http.Request,
+	platform models.Platform, platformName, correlationID string,
 ) (body []byte, eventType string, ok bool) {
 
-	// 1. Verify the request originated from the expected platform.
+	// 1. Platform header check.
 	eventTypeHeader := platform.EventTypeHeader()
 	eventType = r.Header.Get(eventTypeHeader)
 	if eventType == "" {
 		slog.Warn("platform mismatch: expected event-type header not present",
 			"header", eventTypeHeader, "platform", platformName, "correlation_id", correlationID)
-		http.Error(w, fmt.Sprintf("webhook source mismatch: expected platform %q (header %q missing)", platformName, eventTypeHeader), http.StatusBadRequest)
+		http.Error(w, fmt.Sprintf("webhook source mismatch: expected platform %q (header %q missing)",
+			platformName, eventTypeHeader), http.StatusBadRequest)
 		return nil, "", false
 	}
 
-	// 2. Read the body with a size cap to prevent OOM from oversized payloads.
+	// 2. Size-capped body read.
 	r.Body = http.MaxBytesReader(w, r.Body, maxWebhookBodySize)
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		slog.Error("failed to read request body",
 			"error", err, "correlation_id", correlationID)
-		// MaxBytesReader returns a specific error type on overflow;
-		// net/http will have already sent 413 in that case.
 		http.Error(w, "failed to read request body", http.StatusRequestEntityTooLarge)
 		return nil, "", false
 	}
 
-	// 3. Verify webhook signature.
+	// 3. Signature verification.
 	secret := platform.GetSecret()
 	if secret != "" {
 		signatureHeader := r.Header.Get(platform.GetGitScmSignature())
@@ -221,17 +198,25 @@ func (h *WebhookHandler) verifyWebhook(
 		}
 	}
 
+	// 4. JSON well-formedness check — rejects truncated/corrupted payloads
+	// at the gateway before they consume orchestrator resources. Empty
+	// bodies (e.g. GitHub ping events) are allowed through.
+	if len(body) > 0 && !json.Valid(body) {
+		slog.Warn("webhook payload is not valid JSON",
+			"platform", platformName, "correlation_id", correlationID,
+			"body_len", len(body))
+		http.Error(w, "request body is not valid JSON", http.StatusBadRequest)
+		return nil, "", false
+	}
+
 	return body, eventType, true
 }
 
-// jsonResponse is the canonical shape for all webhook responses.
 type jsonResponse struct {
 	TaskID  string `json:"task_id"`
 	Message string `json:"message"`
 }
 
-// writeJSON encodes the response safely with encoding/json to handle
-// special characters correctly (no manual string concatenation).
 func writeJSON(w http.ResponseWriter, status int, taskID, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -248,8 +233,6 @@ func flattenHeaders(h http.Header) map[string]string {
 	return headers
 }
 
-// injectCorrelationID attaches the correlation ID as gRPC outgoing metadata
-// so the orchestrator can continue the trace.
 func injectCorrelationID(ctx context.Context, id string) context.Context {
 	if id == "" {
 		return ctx
@@ -258,8 +241,8 @@ func injectCorrelationID(ctx context.Context, id string) context.Context {
 }
 
 // isJSONContentType checks if the request Content-Type is application/json.
-// Inspired by ArgoCD's enforceContentTypes which rejects non-whitelisted
-// Content-Types on mutation requests to prevent CSRF attacks.
+// Mirrors ArgoCD's enforceContentTypes which rejects non-whitelisted
+// Content-Types on mutation requests.
 func isJSONContentType(r *http.Request) bool {
 	ct := r.Header.Get("Content-Type")
 	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(ct)), "application/json")
